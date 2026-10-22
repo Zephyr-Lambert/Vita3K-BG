@@ -477,7 +477,7 @@ static bool manifest_lists(VKState &state, std::mutex &shaders_mutex, const Sha2
     });
 }
 
-vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmProgram *program, const Sha256Hash &hash, bool is_vertex, bool maskupdate, MemState &mem, const shader::Hints &hints, bool is_srgb) {
+vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmProgram *program, const Sha256Hash &hash, bool is_vertex, bool maskupdate, MemState &mem, const shader::Hints &hints, const shader::TexCoordLinkMap *fragment_texcoord_map, bool is_srgb) {
     const vk::ShaderModule shader_compiling = std::bit_cast<vk::ShaderModule>(~0ULL);
     const bool masked_fetch = !is_vertex && hints.masked_framebuffer_fetch;
 
@@ -533,7 +533,7 @@ vk::PipelineShaderStageCreateInfo PipelineCache::retrieve_shader(const SceGxmPro
     if (masked_fetch)
         features.direct_fragcolor = true;
     const std::string version = masked_fetch ? shader_version + "-masked-fetch1" : shader_version;
-    shader::usse::SpirvCode source = load_spirv_shader(*program, features, true, hints, maskupdate, state.shaders_path, state.shaders_log_path, version, listed);
+    shader::usse::SpirvCode source = load_spirv_shader(*program, features, true, hash, hints, fragment_texcoord_map, maskupdate, state.shaders_path, state.shaders_log_path, version, listed);
 
     vk::ShaderModuleCreateInfo shader_info{
         .codeSize = sizeof(uint32_t) * source.size(),
@@ -925,7 +925,7 @@ vk::Pipeline PipelineCache::compile_pipeline(SceGxmPrimitiveType type, vk::Rende
             .pName = "main_fs"
         };
     } else if (!is_fragment_disabled) {
-        fragment_shader = retrieve_shader(gxm_fragment_shader, fragment_program.hash, false, maskupdate, mem, hints, record.is_gamma_corrected);
+        fragment_shader = retrieve_shader(gxm_fragment_shader, fragment_program.hash, false, maskupdate, mem, hints, &fragment_program.link_info.texcoord_map, record.is_gamma_corrected);
     }
     const vk::PipelineShaderStageCreateInfo shader_stages[] = { vertex_shader, fragment_shader };
     // Depth-only draws still need the mask test before depth/stencil updates.
