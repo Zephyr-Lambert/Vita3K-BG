@@ -1,5 +1,10 @@
 # Vita3K
 
+> [!IMPORTANT]
+> **This is Vita3K-BG, an unofficial fork of Vita3K** with fixes aimed at *Bullet Girls* (PCSG00361).
+> The changes live on the `bullet-girls-fixes` branch. Please don't report bugs from this build to the official Vita3K project.
+> Everything below is the original Vita3K README.
+
 [![C/C++ CI](https://github.com/Vita3K/Vita3K/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/Vita3K/Vita3K/actions/workflows/c-cpp.yml)
 [![Release](https://img.shields.io/github/v/release/Vita3K/Vita3K-builds?include_prereleases)](https://github.com/Vita3K/Vita3K/releases)
 [![Vita3K discord server](https://img.shields.io/discord/408916678911459329?color=5865F2&label=Vita3K%20&logo=discord&logoColor=white)](https://discord.gg/6aGwQzh)

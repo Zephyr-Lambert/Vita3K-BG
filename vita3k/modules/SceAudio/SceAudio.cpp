@@ -182,7 +182,12 @@ EXPORT(int, sceAudioOutOpenPort, SceAudioOutPortType type, int len, int freq, Sc
     port->mode = mode;
 
     const std::lock_guard<std::mutex> lock(emuenv.audio.mutex);
-    const int port_id = emuenv.audio.next_port_id++;
+    // Reuse the lowest free port number instead of counting up forever.
+    // Real hardware only has a handful of ports, so games that open and
+    // release ports repeatedly never see large port numbers.
+    int port_id = 1;
+    while (emuenv.audio.out_ports.contains(port_id))
+        port_id++;
     emuenv.audio.out_ports.emplace(port_id, port);
 
     return port_id;
@@ -289,22 +294,35 @@ EXPORT(int, sceAudioOutSetConfig, int port, int len, int freq, int mode) {
     if ((set_len == prt->len) && (set_freq == prt->freq) && (set_mode == prt->mode))
         return 0;
 
-    if (CALL_EXPORT(sceAudioOutReleasePort, port) != 0)
-        return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
-
+    // Build the replacement port first, then swap it in under the lock.
+    // Previously the old port was released before the new one existed, so a
+    // sound thread calling sceAudioOutOutput in between got INVALID_PORT, and
+    // the port type and volume were lost on every reconfiguration.
     const auto channels = (set_mode == SCE_AUDIO_OUT_MODE_MONO) ? 1 : 2;
 
-    prt = emuenv.audio.open_port(channels, set_freq, set_len);
-    if (!prt)
+    AudioOutPortPtr new_prt = emuenv.audio.open_port(channels, set_freq, set_len);
+    if (!new_prt)
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_NOT_OPENED);
 
-    // Save the port configuration
-    prt->freq = set_freq;
-    prt->len = set_len;
-    prt->mode = set_mode;
+    new_prt->type = prt->type;
+    new_prt->freq = set_freq;
+    new_prt->len = set_len;
+    new_prt->mode = set_mode;
+    new_prt->left_channel_volume = prt->left_channel_volume;
+    new_prt->right_channel_volume = prt->right_channel_volume;
+    new_prt->volume = prt->volume;
+    emuenv.audio.set_volume(*new_prt, new_prt->volume);
+
+    // Wake anything still blocked on the old port so it doesn't hang
+    // (must happen while the old port is still registered).
+    prt->stopping = true;
+    emuenv.audio.adapter->wake_all_ports();
 
     const std::lock_guard<std::mutex> lock(emuenv.audio.mutex);
-    emuenv.audio.out_ports.emplace(port, prt);
+    auto it = emuenv.audio.out_ports.find(port);
+    if (it == emuenv.audio.out_ports.end())
+        return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
+    it->second = new_prt;
 
     return 0;
 }
