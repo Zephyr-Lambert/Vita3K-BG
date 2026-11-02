@@ -40,6 +40,10 @@ struct CubebAudioOutPort : AudioOutPort {
     // position of the next audio buffer to put audio
     int next_audio_buffer = 0;
     int nb_buffers_ready = 0;
+    // Vita3K-BG: set when the host stream reports an error/drain
+    std::atomic<bool> stream_failed{ false };
+    // Vita3K-BG: number of times output had to recover from a stall
+    int stall_count = 0;
     // cubeb_stream_set_volume rejects anything above 1.0, so gain beyond that
     // is applied to the samples in software by the audio callback
     std::atomic<float> extra_gain{ 1.0f };

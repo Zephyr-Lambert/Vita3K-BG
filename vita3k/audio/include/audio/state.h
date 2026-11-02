@@ -24,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #define SCE_AUDIO_OUT_MAX_VOL 32768 //!< Maximum output port volume
@@ -93,8 +94,11 @@ struct AudioState {
     AudioInPort in_port;
     std::string audio_backend;
     float global_volume = 1;
+    // Vita3K-BG: background check that logs when the game stops feeding audio
+    std::jthread watchdog;
 
     bool init(const std::string &adapter_name);
+    void start_watchdog();
     void deinit();
     void stop_all_ports();
     void set_backend(const std::string &adapter_name);

@@ -23,9 +23,45 @@
 #include <util/log.h>
 
 #include <cassert>
+#include <chrono>
 #include <cstring>
 
+static uint64_t now_us() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+// Vita3K-BG: logs (at warning level) when a port that was being fed every frame
+// suddenly stops receiving audio. Tells us whether the game's sound thread got
+// stuck somewhere before it reached the audio output.
+void AudioState::start_watchdog() {
+    if (watchdog.joinable())
+        return;
+    watchdog = std::jthread([this](std::stop_token stop) {
+        std::map<int, bool> reported;
+        while (!stop.stop_requested()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            const std::lock_guard<std::mutex> lock(mutex);
+            const uint64_t now = now_us();
+            for (const auto &[id, port] : out_ports) {
+                if (port->last_output == 0)
+                    continue;
+                const uint64_t idle = now > port->last_output ? now - port->last_output : 0;
+                if (idle > 2'000'000) {
+                    if (!reported[id]) {
+                        reported[id] = true;
+                        LOG_WARN("[Vita3K-BG] audio port {} (type {}) has received no audio for {} ms", id, port->type, idle / 1000);
+                    }
+                } else if (reported[id]) {
+                    reported[id] = false;
+                    LOG_WARN("[Vita3K-BG] audio port {} is receiving audio again", id);
+                }
+            }
+        }
+    });
+}
+
 bool AudioState::init(const std::string &adapter_name) {
+    start_watchdog();
     set_backend(adapter_name);
     if (!adapter)
         return false;
