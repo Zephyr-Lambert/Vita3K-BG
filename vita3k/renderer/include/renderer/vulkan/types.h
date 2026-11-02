@@ -337,6 +337,9 @@ struct VKContext : public renderer::Context {
     uint16_t last_macroblock_y = ~0;
     // special case where we can't determine the current macroblock
     bool ignore_macroblock = false;
+    // Vita3K-BG: depth/stencil of macroblocks never cleared this scene must be
+    // cleared when switching to the full-screen (ignore_macroblock) path
+    bool bg_pending_macroblock_clear = false;
 
     // used if necessary to restart easily the render pass
     vk::RenderPassBeginInfo curr_renderpass_info;
