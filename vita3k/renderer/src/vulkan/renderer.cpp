@@ -38,6 +38,7 @@
 #include <overlay/display_manager.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <mutex>
 #include <string_view>
 #include <unordered_set>
@@ -373,7 +374,9 @@ VKState::VKState(int gpu_idx)
 }
 
 bool VKState::init() {
-    shader_version = fmt::format("v{}", shader::CURRENT_VERSION);
+    // Vita3K-BG: separate shader cache for full-precision shaders (see spirv_recompiler.cpp)
+    const char *bg_relaxed = std::getenv("VITA3K_BG_RELAXED_PRECISION");
+    shader_version = fmt::format("v{}{}", shader::CURRENT_VERSION, (bg_relaxed && bg_relaxed[0] == '1') ? "" : "-bgfp32");
     features.use_mask_bit = true;
     return true;
 }
