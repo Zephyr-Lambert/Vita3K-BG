@@ -227,9 +227,9 @@ EXPORT(int, sceAudioOutOutput, int port, const void *buf) {
     const AudioOutPortPtr prt = lock_and_find(port, emuenv.audio.out_ports, emuenv.audio.mutex);
     if (!prt) {
         {
-        bg_log_invalid(emuenv, thread_id, "sceAudioOutOutput", port);
-        return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
-    }
+            bg_log_invalid(emuenv, thread_id, "sceAudioOutOutput", port);
+            return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
+        }
     }
 
     // Empty "buf" variable is valid. It mean wait until sound output is completed.
@@ -255,9 +255,9 @@ EXPORT(int, sceAudioOutGetRestSample, int port) {
     const AudioOutPortPtr prt = lock_and_find(port, emuenv.audio.out_ports, emuenv.audio.mutex);
     if (!prt) {
         {
-        bg_log_invalid(emuenv, thread_id, "sceAudioOutGetRestSample", port);
-        return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
-    }
+            bg_log_invalid(emuenv, thread_id, "sceAudioOutGetRestSample", port);
+            return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
+        }
     }
     int samples_available = emuenv.audio.get_rest_sample(*prt);
     if (prt->type == SCE_AUDIO_OUT_PORT_TYPE_MAIN) {
@@ -318,8 +318,7 @@ EXPORT(int, sceAudioOutSetConfig, int port, int len, int freq, int mode) {
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_FORMAT);
 
     AudioOutPortPtr prt = lock_and_find(port, emuenv.audio.out_ports, emuenv.audio.mutex);
-    if (!prt)
-        {
+    if (!prt) {
         bg_log_invalid(emuenv, thread_id, "sceAudioOutSetConfig", port);
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
     }
@@ -385,8 +384,7 @@ EXPORT(int, sceAudioOutSetVolume, int port, SceAudioOutChannelFlag ch, int *vol)
 
     const AudioOutPortPtr prt = lock_and_find(port, emuenv.audio.out_ports, emuenv.audio.mutex);
 
-    if (!prt)
-        {
+    if (!prt) {
         bg_log_invalid(emuenv, thread_id, "sceAudioOutSetVolume", port);
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
     }
