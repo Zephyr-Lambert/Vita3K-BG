@@ -503,7 +503,14 @@ EXPORT(int, sceAudiodecPartlyDecode, SceAudiodecCtrl *ctrl, SceUInt32 samples_of
         decoder->receive(temp_storage.data() + old_size, &size);
     }
 
-    memcpy(pcm_data + samples_offset * bytes_per_sample, temp_storage.data() + samples_offset * bytes_per_sample, samples_to_decode * bytes_per_sample);
+    // Vita3K-BG fix: the requested samples [offset, offset + count) are written at
+    // the START of the game's output buffer, not "offset" samples into it.
+    // Writing them at pcm_data + offset overflowed the game's buffer whenever
+    // libatrac asked for a non-zero offset (e.g. at a music loop point),
+    // overwriting nearby game data. Bullet Girls lost all audio and hung.
+    memcpy(pcm_data, temp_storage.data() + samples_offset * bytes_per_sample, samples_to_decode * bytes_per_sample);
+    // and report only what was actually given back to the game
+    ctrl->pcm_size_given = samples_to_decode * bytes_per_sample;
 
     {
         BgDecodeRecord r;
@@ -518,13 +525,9 @@ EXPORT(int, sceAudiodecPartlyDecode, SceAudiodecCtrl *ctrl, SceUInt32 samples_of
         r.pcm_size_given = ctrl->pcm_size_given;
         r.offset = samples_offset;
         r.count = samples_to_decode;
-        r.write_start = r.pcm_addr + samples_offset * bytes_per_sample;
+        r.write_start = r.pcm_addr;
         r.write_end = r.write_start + samples_to_decode * bytes_per_sample;
         bg_record_decode(r);
-        if (ctrl->pcm_size_max && (samples_offset + samples_to_decode) * bytes_per_sample > ctrl->pcm_size_max)
-            LOG_WARN("[Vita3K-BG] PartlyDecode wrote past the game's buffer (off {} n {} max {} bytes)", samples_offset, samples_to_decode, ctrl->pcm_size_max);
-        if (ctrl->es_size_used > ctrl->es_size_max)
-            LOG_WARN("[Vita3K-BG] PartlyDecode reported using {} input bytes but only {} were available", ctrl->es_size_used, ctrl->es_size_max);
     }
 
     return 0;
