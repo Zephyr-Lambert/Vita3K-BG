@@ -156,8 +156,15 @@ static std::string bg_open_ports(EmuEnvState &emuenv) {
     return out.empty() ? std::string("none") : out;
 }
 
+void bg_dump_audiodec_trace(); // defined in SceAudiodecUser.cpp
+
 static void bg_log_invalid(EmuEnvState &emuenv, SceUID thread_id, const char *func, int port) {
     static std::atomic<int> count{ 0 };
+    if (count == 0) {
+        // first sign of corruption: show what the audio decoder did just before
+        bg_dump_audiodec_trace();
+        bg_dump_import_trace(thread_id);
+    }
     if (count++ < 40) {
         const std::lock_guard<std::mutex> lock(emuenv.audio.mutex);
         LOG_WARN("[Vita3K-BG] {} called with unknown port {} (0x{:X}) from thread '{}'; open ports: {}",

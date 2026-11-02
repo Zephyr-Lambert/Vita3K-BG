@@ -41,6 +41,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string_view>
 #include <unordered_set>
 
 static constexpr bool LOG_UNK_NIDS_ALWAYS = false;
@@ -229,7 +230,10 @@ void call_import(EmuEnvState &emuenv, CPUState &cpu, uint32_t nid, SceUID thread
         }
     }
     BgTraceEntry *bg_entry = nullptr;
-    if (bg_ring) {
+    // skip the very frequent memory helpers so the trace keeps the interesting calls
+    if (bg_ring && std::string_view(import_name(nid)).starts_with("sceClib"))
+        ;
+    else if (bg_ring) {
         const std::lock_guard<std::mutex> lock(bg_ring->mutex);
         bg_entry = &bg_ring->entries[bg_ring->next];
         bg_ring->next = (bg_ring->next + 1) % bg_ring->entries.size();

@@ -17,9 +17,12 @@
 
 #include "SceAudiodecUser.h"
 
+#include <array>
 #include <audio/state.h>
+#include <chrono>
 #include <codec/state.h>
 #include <kernel/state.h>
+#include <mutex>
 #include <util/lock_and_find.h>
 #include <util/tracy.h>
 
@@ -242,6 +245,53 @@ EXPORT(int, sceAudiodecCreateDecoderResident) {
     return UNIMPLEMENTED();
 }
 
+// ---------------------------------------------------------------------------
+// Vita3K-BG diagnostics: remember the last decode calls (where they wrote PCM,
+// how much, and what sizes were reported back) so they can be dumped when a
+// game's memory looks corrupted.
+// ---------------------------------------------------------------------------
+namespace {
+struct BgDecodeRecord {
+    uint64_t time_us = 0;
+    const char *func = "";
+    SceUID handle = 0;
+    uint32_t es_addr = 0, es_size_max = 0, es_size_used = 0;
+    uint32_t pcm_addr = 0, pcm_size_max = 0, pcm_size_given = 0;
+    uint32_t offset = 0, count = 0;
+    uint32_t write_start = 0, write_end = 0;
+};
+std::mutex bg_decode_mutex;
+std::array<BgDecodeRecord, 32> bg_decode_ring{};
+size_t bg_decode_next = 0;
+
+uint64_t bg_decode_now() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void bg_record_decode(const BgDecodeRecord &r) {
+    const std::lock_guard<std::mutex> lock(bg_decode_mutex);
+    bg_decode_ring[bg_decode_next] = r;
+    bg_decode_next = (bg_decode_next + 1) % bg_decode_ring.size();
+}
+} // namespace
+
+void bg_dump_audiodec_trace() {
+    const std::lock_guard<std::mutex> lock(bg_decode_mutex);
+    const uint64_t now = bg_decode_now();
+    LOG_WARN("[Vita3K-BG] ---- last audio decode calls, oldest first ----");
+    for (size_t i = 0; i < bg_decode_ring.size(); i++) {
+        const BgDecodeRecord &r = bg_decode_ring[(bg_decode_next + i) % bg_decode_ring.size()];
+        if (r.time_us == 0)
+            continue;
+        LOG_WARN("[Vita3K-BG]   -{:>6} ms {} h={} off={} n={} es@{} used/max={}/{} pcm@{} given/max={}/{} wrote {}..{}",
+            (now - r.time_us) / 1000, r.func, r.handle, r.offset, r.count,
+            log_hex(r.es_addr), r.es_size_used, r.es_size_max,
+            log_hex(r.pcm_addr), r.pcm_size_given, r.pcm_size_max,
+            log_hex(r.write_start), log_hex(r.write_end));
+    }
+    LOG_WARN("[Vita3K-BG] ---- end of decode trace ----");
+}
+
 static int decode_audio_frames(EmuEnvState &emuenv, const char *export_name, SceAudiodecCtrl *ctrl, SceUInt32 nb_frames) {
     if (!ctrl)
         return SCE_AUDIODEC_ERROR_INVALID_PTR;
@@ -274,6 +324,25 @@ static int decode_audio_frames(EmuEnvState &emuenv, const char *export_name, Sce
         assert(pcm_size_given <= ctrl->pcm_size_max);
         ctrl->pcm_size_given += pcm_size_given;
         pcm_data += pcm_size_given;
+    }
+
+    {
+        BgDecodeRecord r;
+        r.time_us = bg_decode_now();
+        r.func = export_name;
+        r.handle = ctrl->handle;
+        r.es_addr = ctrl->es_data.address();
+        r.es_size_max = ctrl->es_size_max;
+        r.es_size_used = ctrl->es_size_used;
+        r.pcm_addr = ctrl->pcm_data.address();
+        r.pcm_size_max = ctrl->pcm_size_max;
+        r.pcm_size_given = ctrl->pcm_size_given;
+        r.count = nb_frames;
+        r.write_start = r.pcm_addr;
+        r.write_end = r.pcm_addr + ctrl->pcm_size_given;
+        bg_record_decode(r);
+        if (ctrl->pcm_size_max && ctrl->pcm_size_given > ctrl->pcm_size_max)
+            LOG_WARN("[Vita3K-BG] {} wrote {} bytes but the game's buffer is only {} bytes", export_name, ctrl->pcm_size_given, ctrl->pcm_size_max);
     }
 
     return 0;
@@ -435,6 +504,28 @@ EXPORT(int, sceAudiodecPartlyDecode, SceAudiodecCtrl *ctrl, SceUInt32 samples_of
     }
 
     memcpy(pcm_data + samples_offset * bytes_per_sample, temp_storage.data() + samples_offset * bytes_per_sample, samples_to_decode * bytes_per_sample);
+
+    {
+        BgDecodeRecord r;
+        r.time_us = bg_decode_now();
+        r.func = "sceAudiodecPartlyDecode";
+        r.handle = ctrl->handle;
+        r.es_addr = ctrl->es_data.address();
+        r.es_size_max = ctrl->es_size_max;
+        r.es_size_used = ctrl->es_size_used;
+        r.pcm_addr = ctrl->pcm_data.address();
+        r.pcm_size_max = ctrl->pcm_size_max;
+        r.pcm_size_given = ctrl->pcm_size_given;
+        r.offset = samples_offset;
+        r.count = samples_to_decode;
+        r.write_start = r.pcm_addr + samples_offset * bytes_per_sample;
+        r.write_end = r.write_start + samples_to_decode * bytes_per_sample;
+        bg_record_decode(r);
+        if (ctrl->pcm_size_max && (samples_offset + samples_to_decode) * bytes_per_sample > ctrl->pcm_size_max)
+            LOG_WARN("[Vita3K-BG] PartlyDecode wrote past the game's buffer (off {} n {} max {} bytes)", samples_offset, samples_to_decode, ctrl->pcm_size_max);
+        if (ctrl->es_size_used > ctrl->es_size_max)
+            LOG_WARN("[Vita3K-BG] PartlyDecode reported using {} input bytes but only {} were available", ctrl->es_size_used, ctrl->es_size_max);
+    }
 
     return 0;
 }
