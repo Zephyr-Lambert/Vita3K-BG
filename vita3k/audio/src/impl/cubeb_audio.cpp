@@ -19,7 +19,6 @@
 #include "util/log.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 
 // scales S16LE samples in place, used to push the volume past the 1.0 ceiling cubeb enforces natively
@@ -81,27 +80,7 @@ static long impl_cubeb_audio_callback(cubeb_stream *stream, void *user_data, con
 }
 
 static void impl_cubeb_state_callback(cubeb_stream *stm, void *user, cubeb_state state) {
-    // Vita3K-BG: log stream state changes. If the host stream errors or drains,
-    // the cubeb callback stops running and nothing would ever free a buffer.
-    CubebAudioOutPort *port = static_cast<CubebAudioOutPort *>(user);
-    switch (state) {
-    case CUBEB_STATE_ERROR:
-        LOG_ERROR("[Vita3K-BG] cubeb audio stream reported an ERROR");
-        if (port)
-            port->stream_failed = true;
-        break;
-    case CUBEB_STATE_DRAINED:
-        LOG_WARN("[Vita3K-BG] cubeb audio stream DRAINED");
-        if (port)
-            port->stream_failed = true;
-        break;
-    default:
-        break;
-    }
-    if (port) {
-        std::lock_guard<std::mutex> lock(port->mutex);
-        port->cond_var.notify_all();
-    }
+    // we must give this function as a parameter to cubeb, but we don't care about it
 }
 
 CubebAudioOutPort::~CubebAudioOutPort() {
@@ -174,34 +153,9 @@ void CubebAudioAdapter::audio_output(AudioOutPort &out_port, const void *buffer)
         return;
 
     if (port.nb_buffers_ready == port.audio_buffers.size()) {
-        // Vita3K-BG: never wait forever. If the host stream stops pulling data
-        // (error, device change...), the game's sound thread used to block here
-        // permanently: sound cut out and the game later froze waiting on it.
-        const auto timeout = std::chrono::milliseconds(std::max<uint64_t>(100, out_port.len_microseconds * 8 / 1000));
-        const bool woke = port.cond_var.wait_for(lock, timeout, [&] {
-            return out_port.stopping || port.stream_failed || port.nb_buffers_ready < port.audio_buffers.size();
-        });
+        port.cond_var.wait(lock);
         if (out_port.stopping)
             return;
-        if (!woke || port.stream_failed) {
-            port.stall_count++;
-            if (port.stall_count == 1 || port.stall_count % 500 == 0)
-                LOG_ERROR("[Vita3K-BG] audio output stalled (host stream not consuming, failed={}, count={}); recovering", port.stream_failed.load(), port.stall_count);
-            // drop the oldest queued buffer so the game can keep running
-            port.next_audio_buffer = (port.next_audio_buffer + 1) % port.audio_buffers.size();
-            port.audio_buffers[port.next_audio_buffer].buffer_position = 0;
-            port.nb_buffers_ready--;
-            // try to bring the host stream back
-            if (port.stream_failed.exchange(false) || port.stall_count % 50 == 1) {
-                lock.unlock();
-                cubeb_stream_stop(port.out_stream);
-                const int r = cubeb_stream_start(port.out_stream);
-                LOG_WARN("[Vita3K-BG] restarted cubeb audio stream (result {})", r);
-                lock.lock();
-                if (out_port.stopping)
-                    return;
-            }
-        }
     }
 
     assert(port.nb_buffers_ready < port.audio_buffers.size());

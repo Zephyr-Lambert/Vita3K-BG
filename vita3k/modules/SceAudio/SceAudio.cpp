@@ -20,13 +20,8 @@
 #include <audio/state.h>
 #include <kernel/state.h>
 #include <kernel/thread/thread_state.h>
-#include <modules/module_parent.h>
 #include <util/lock_and_find.h>
 #include <util/tracy.h>
-
-#include <fmt/format.h>
-
-#include <atomic>
 
 TRACY_MODULE_NAME(SceAudio);
 
@@ -142,36 +137,6 @@ std::string to_debug_str<SceAudioOutChannelFlag>(const MemState &mem, SceAudioOu
     return std::to_string(type);
 }
 
-// Vita3K-BG diagnostics: describe the calling thread and the open ports so the
-// log shows exactly which port number a game used and what existed at the time.
-static std::string bg_thread_name(EmuEnvState &emuenv, SceUID thread_id) {
-    const ThreadStatePtr t = emuenv.kernel.get_thread(thread_id);
-    return t ? t->name : std::string("?");
-}
-
-static std::string bg_open_ports(EmuEnvState &emuenv) {
-    std::string out;
-    for (const auto &[id, p] : emuenv.audio.out_ports)
-        out += fmt::format("{}(type {}) ", id, p->type);
-    return out.empty() ? std::string("none") : out;
-}
-
-void bg_dump_audiodec_trace(); // defined in SceAudiodecUser.cpp
-
-static void bg_log_invalid(EmuEnvState &emuenv, SceUID thread_id, const char *func, int port) {
-    static std::atomic<int> count{ 0 };
-    if (count == 0) {
-        // first sign of corruption: show what the audio decoder did just before
-        bg_dump_audiodec_trace();
-        bg_dump_import_trace(thread_id);
-    }
-    if (count++ < 40) {
-        const std::lock_guard<std::mutex> lock(emuenv.audio.mutex);
-        LOG_WARN("[Vita3K-BG] {} called with unknown port {} (0x{:X}) from thread '{}'; open ports: {}",
-            func, port, static_cast<uint32_t>(port), bg_thread_name(emuenv, thread_id), bg_open_ports(emuenv));
-    }
-}
-
 EXPORT(int, sceAudioOutGetAdopt, SceAudioOutPortType type) {
     TRACY_FUNC(sceAudioOutGetAdopt, type);
     // this is used in case the vita is using voice chat, not useful for us
@@ -217,17 +182,8 @@ EXPORT(int, sceAudioOutOpenPort, SceAudioOutPortType type, int len, int freq, Sc
     port->mode = mode;
 
     const std::lock_guard<std::mutex> lock(emuenv.audio.mutex);
-    if (!emuenv.audio.on_port_stall)
-        emuenv.audio.on_port_stall = [](int tid) { bg_dump_import_trace(tid); };
-    // Reuse the lowest free port number instead of counting up forever.
-    // Real hardware only has a handful of ports, so games that open and
-    // release ports repeatedly never see large port numbers.
-    int port_id = 1;
-    while (emuenv.audio.out_ports.contains(port_id))
-        port_id++;
+    const int port_id = emuenv.audio.next_port_id++;
     emuenv.audio.out_ports.emplace(port_id, port);
-    LOG_WARN("[Vita3K-BG] OpenPort type {} len {} freq {} mode {} -> port {} (thread '{}'); open ports: {}",
-        static_cast<int>(type), len, freq, static_cast<int>(mode), port_id, bg_thread_name(emuenv, thread_id), bg_open_ports(emuenv));
 
     return port_id;
 }
@@ -236,10 +192,7 @@ EXPORT(int, sceAudioOutOutput, int port, const void *buf) {
     TRACY_FUNC(sceAudioOutOutput, port, buf);
     const AudioOutPortPtr prt = lock_and_find(port, emuenv.audio.out_ports, emuenv.audio.mutex);
     if (!prt) {
-        {
-            bg_log_invalid(emuenv, thread_id, "sceAudioOutOutput", port);
-            return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
-        }
+        return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
     }
 
     // Empty "buf" variable is valid. It mean wait until sound output is completed.
@@ -253,7 +206,6 @@ EXPORT(int, sceAudioOutOutput, int port, const void *buf) {
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
     }
     // is it really useful to update the thread status?
-    prt->last_thread_id = thread_id;
     thread->begin_host_wait();
     emuenv.audio.audio_output(*prt, buf);
     thread->end_host_wait();
@@ -265,10 +217,7 @@ EXPORT(int, sceAudioOutGetRestSample, int port) {
     TRACY_FUNC(sceAudioOutGetRestSample, port);
     const AudioOutPortPtr prt = lock_and_find(port, emuenv.audio.out_ports, emuenv.audio.mutex);
     if (!prt) {
-        {
-            bg_log_invalid(emuenv, thread_id, "sceAudioOutGetRestSample", port);
-            return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
-        }
+        return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
     }
     int samples_available = emuenv.audio.get_rest_sample(*prt);
     if (prt->type == SCE_AUDIO_OUT_PORT_TYPE_MAIN) {
@@ -292,10 +241,8 @@ EXPORT(int, sceAudioOutReleasePort, int port) {
     TRACY_FUNC(sceAudioOutReleasePort, port);
     const std::lock_guard<std::mutex> guard(emuenv.audio.mutex);
     if (!emuenv.audio.out_ports.erase(port)) {
-        LOG_WARN("[Vita3K-BG] ReleasePort on unknown port {} (thread '{}'); open ports: {}", port, bg_thread_name(emuenv, thread_id), bg_open_ports(emuenv));
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
     }
-    LOG_WARN("[Vita3K-BG] ReleasePort {} (thread '{}'); open ports: {}", port, bg_thread_name(emuenv, thread_id), bg_open_ports(emuenv));
 
     return 0;
 }
@@ -329,10 +276,8 @@ EXPORT(int, sceAudioOutSetConfig, int port, int len, int freq, int mode) {
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_FORMAT);
 
     AudioOutPortPtr prt = lock_and_find(port, emuenv.audio.out_ports, emuenv.audio.mutex);
-    if (!prt) {
-        bg_log_invalid(emuenv, thread_id, "sceAudioOutSetConfig", port);
+    if (!prt)
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
-    }
 
     if ((freq >= 0) && (prt->type == SCE_AUDIO_OUT_PORT_TYPE_MAIN) && (freq != 48000))
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_SAMPLE_FREQ);
@@ -344,36 +289,22 @@ EXPORT(int, sceAudioOutSetConfig, int port, int len, int freq, int mode) {
     if ((set_len == prt->len) && (set_freq == prt->freq) && (set_mode == prt->mode))
         return 0;
 
-    // Build the replacement port first, then swap it in under the lock.
-    // Previously the old port was released before the new one existed, so a
-    // sound thread calling sceAudioOutOutput in between got INVALID_PORT, and
-    // the port type and volume were lost on every reconfiguration.
+    if (CALL_EXPORT(sceAudioOutReleasePort, port) != 0)
+        return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
+
     const auto channels = (set_mode == SCE_AUDIO_OUT_MODE_MONO) ? 1 : 2;
 
-    AudioOutPortPtr new_prt = emuenv.audio.open_port(channels, set_freq, set_len);
-    if (!new_prt)
+    prt = emuenv.audio.open_port(channels, set_freq, set_len);
+    if (!prt)
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_NOT_OPENED);
 
-    new_prt->type = prt->type;
-    new_prt->freq = set_freq;
-    new_prt->len = set_len;
-    new_prt->mode = set_mode;
-    new_prt->left_channel_volume = prt->left_channel_volume;
-    new_prt->right_channel_volume = prt->right_channel_volume;
-    new_prt->volume = prt->volume;
-    emuenv.audio.set_volume(*new_prt, new_prt->volume);
-
-    // Wake anything still blocked on the old port so it doesn't hang
-    // (must happen while the old port is still registered).
-    prt->stopping = true;
-    emuenv.audio.adapter->wake_all_ports();
+    // Save the port configuration
+    prt->freq = set_freq;
+    prt->len = set_len;
+    prt->mode = set_mode;
 
     const std::lock_guard<std::mutex> lock(emuenv.audio.mutex);
-    auto it = emuenv.audio.out_ports.find(port);
-    if (it == emuenv.audio.out_ports.end())
-        return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
-    it->second = new_prt;
-    LOG_WARN("[Vita3K-BG] SetConfig port {} -> len {} freq {} mode {} (thread '{}')", port, set_len, set_freq, set_mode, bg_thread_name(emuenv, thread_id));
+    emuenv.audio.out_ports.emplace(port, prt);
 
     return 0;
 }
@@ -395,10 +326,8 @@ EXPORT(int, sceAudioOutSetVolume, int port, SceAudioOutChannelFlag ch, int *vol)
 
     const AudioOutPortPtr prt = lock_and_find(port, emuenv.audio.out_ports, emuenv.audio.mutex);
 
-    if (!prt) {
-        bg_log_invalid(emuenv, thread_id, "sceAudioOutSetVolume", port);
+    if (!prt)
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
-    }
 
     const int left = (ch & SCE_AUDIO_VOLUME_FLAG_L_CH) ? vol[0] : prt->left_channel_volume;
     const int right = (ch & SCE_AUDIO_VOLUME_FLAG_R_CH) ? vol[1] : prt->right_channel_volume;

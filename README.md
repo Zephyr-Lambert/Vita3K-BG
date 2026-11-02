@@ -3,6 +3,10 @@
 > [!IMPORTANT]
 > **This is Vita3K-BG, an unofficial fork of Vita3K** with fixes aimed at *Bullet Girls* (PCSG00361).
 > The changes live on the `bullet-girls-fixes` branch. Please don't report bugs from this build to the official Vita3K project.
+>
+> **Fixed so far**
+> - Audio cutting out about 1:45 into a mission, followed by the game hanging at mission end
+>   (`sceAudiodecPartlyDecode` wrote past the game's output buffer at music loop points).
 > Everything below is the original Vita3K README.
 
 [![C/C++ CI](https://github.com/Vita3K/Vita3K/actions/workflows/c-cpp.yml/badge.svg)](https://github.com/Vita3K/Vita3K/actions/workflows/c-cpp.yml)

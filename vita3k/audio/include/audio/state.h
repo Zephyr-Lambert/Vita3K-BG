@@ -24,7 +24,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <vector>
 
 #define SCE_AUDIO_OUT_MAX_VOL 32768 //!< Maximum output port volume
@@ -52,8 +51,6 @@ struct AudioOutPort {
     int len = 0;
     int freq = 0;
     int mode = 0;
-    // Vita3K-BG: guest thread that last sent audio to this port
-    int last_thread_id = 0;
 };
 
 typedef std::shared_ptr<AudioOutPort> AudioOutPortPtr;
@@ -96,13 +93,8 @@ struct AudioState {
     AudioInPort in_port;
     std::string audio_backend;
     float global_volume = 1;
-    // Vita3K-BG: background check that logs when the game stops feeding audio
-    std::jthread watchdog;
-    // Vita3K-BG: called (with the last feeding thread) when a port stops receiving audio
-    std::function<void(int)> on_port_stall;
 
     bool init(const std::string &adapter_name);
-    void start_watchdog();
     void deinit();
     void stop_all_ports();
     void set_backend(const std::string &adapter_name);
