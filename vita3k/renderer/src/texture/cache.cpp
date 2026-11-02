@@ -28,6 +28,7 @@
 #include <util/log.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #if defined(__x86_64__) && !defined(__APPLE__)
@@ -291,6 +292,12 @@ using namespace texture;
 
 bool TextureCache::init(const bool hashless_texture_cache, const fs::path &texture_folder, std::string_view game_id, const size_t sampler_cache_size) {
     use_protect = hashless_texture_cache;
+    // Vita3K-BG test switch: VITA3K_BG_HASH_TEXTURES=1 detects texture changes by
+    // content hash only (no memory page protection)
+    if (const char *v = std::getenv("VITA3K_BG_HASH_TEXTURES"); v && v[0] == '1') {
+        use_protect = false;
+        LOG_WARN("[Vita3K-BG] texture cache: page protection disabled, using content hashes (VITA3K_BG_HASH_TEXTURES=1)");
+    }
 
     // initialize the texture queue
     texture_queue.init(TextureCacheSize);

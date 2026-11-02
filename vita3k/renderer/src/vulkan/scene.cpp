@@ -25,6 +25,8 @@
 
 #include <util/log.h>
 
+#include <cstdlib>
+
 namespace renderer::vulkan {
 
 void set_uniform_buffer(VKContext &context, MemState &mem, const ShaderProgram *program, const bool vertex_shader, const int block_num, const int size, Ptr<uint8_t> data) {
@@ -180,6 +182,20 @@ static void draw_bind_descriptors(VKContext &context, MemState &mem) {
     // try to use last descriptor if it still matches
     bool need_vert_descr = (vertex_textures_count != context.last_vert_texture_count);
     bool need_frag_descr = (fragment_texture_count != context.last_frag_texture_count);
+
+    // Vita3K-BG test switch: VITA3K_BG_FRESH_DESCRIPTORS=1 writes a fresh texture
+    // descriptor set for every draw instead of reusing the previous one
+    static const bool bg_fresh_descriptors = [] {
+        const char *v = std::getenv("VITA3K_BG_FRESH_DESCRIPTORS");
+        const bool on = v && v[0] == '1';
+        if (on)
+            LOG_WARN("[Vita3K-BG] writing fresh texture descriptors for every draw (VITA3K_BG_FRESH_DESCRIPTORS=1)");
+        return on;
+    }();
+    if (bg_fresh_descriptors) {
+        need_vert_descr = true;
+        need_frag_descr = true;
+    }
 
     context.last_vert_texture_count = vertex_textures_count;
     context.last_frag_texture_count = fragment_texture_count;
