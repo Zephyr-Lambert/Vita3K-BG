@@ -36,7 +36,6 @@
 #include <spirv_glsl.hpp>
 
 #include <algorithm>
-#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <list>
@@ -2096,40 +2095,6 @@ static SpirvCode convert_gxp_to_spirv_impl(const SceGxmProgram &program, const s
     }
 
     b.dump(spirv);
-
-    // Vita3K-BG fix: remove every RelaxedPrecision decoration. Some drivers
-    // (e.g. NVIDIA on RTX cards) honor it and compute/interpolate those values
-    // at half precision. The PS Vita evaluates texture coordinates at full
-    // precision even when a shader declares them as F16, so with half precision
-    // the UVs of large or tiled textures came out offset, tilted or scrambled.
-    // VITA3K_BG_RELAXED_PRECISION=1 keeps the original behaviour for comparison.
-    static const bool bg_keep_relaxed = [] {
-        const char *v = std::getenv("VITA3K_BG_RELAXED_PRECISION");
-        return v && v[0] == '1';
-    }();
-    if (!bg_keep_relaxed && spirv.size() > 5) {
-        constexpr uint32_t OP_DECORATE = 71;
-        constexpr uint32_t OP_MEMBER_DECORATE = 72;
-        constexpr uint32_t DECORATION_RELAXED_PRECISION = 0;
-        SpirvCode stripped(spirv.begin(), spirv.begin() + 5);
-        stripped.reserve(spirv.size());
-        size_t pos = 5;
-        while (pos < spirv.size()) {
-            const uint32_t word_count = spirv[pos] >> 16;
-            const uint32_t opcode = spirv[pos] & 0xFFFF;
-            if (word_count == 0 || pos + word_count > spirv.size()) {
-                // malformed, keep the rest untouched
-                stripped.insert(stripped.end(), spirv.begin() + pos, spirv.end());
-                break;
-            }
-            const bool relaxed = (opcode == OP_DECORATE && word_count >= 3 && spirv[pos + 2] == DECORATION_RELAXED_PRECISION)
-                || (opcode == OP_MEMBER_DECORATE && word_count >= 4 && spirv[pos + 3] == DECORATION_RELAXED_PRECISION);
-            if (!relaxed)
-                stripped.insert(stripped.end(), spirv.begin() + pos, spirv.begin() + pos + word_count);
-            pos += word_count;
-        }
-        spirv = std::move(stripped);
-    }
 
     if (LOG_SHADER_CODE || force_shader_debug) {
         std::string spirv_dump;
