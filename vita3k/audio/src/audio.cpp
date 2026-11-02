@@ -50,6 +50,8 @@ void AudioState::start_watchdog() {
                     if (!reported[id]) {
                         reported[id] = true;
                         LOG_WARN("[Vita3K-BG] audio port {} (type {}) has received no audio for {} ms", id, port->type, idle / 1000);
+                        if (on_port_stall && port->last_thread_id != 0)
+                            on_port_stall(port->last_thread_id);
                     }
                 } else if (reported[id]) {
                     reported[id] = false;

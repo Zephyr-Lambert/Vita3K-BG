@@ -20,6 +20,7 @@
 #include <audio/state.h>
 #include <kernel/state.h>
 #include <kernel/thread/thread_state.h>
+#include <modules/module_parent.h>
 #include <util/lock_and_find.h>
 #include <util/tracy.h>
 
@@ -209,6 +210,8 @@ EXPORT(int, sceAudioOutOpenPort, SceAudioOutPortType type, int len, int freq, Sc
     port->mode = mode;
 
     const std::lock_guard<std::mutex> lock(emuenv.audio.mutex);
+    if (!emuenv.audio.on_port_stall)
+        emuenv.audio.on_port_stall = [](int tid) { bg_dump_import_trace(tid); };
     // Reuse the lowest free port number instead of counting up forever.
     // Real hardware only has a handful of ports, so games that open and
     // release ports repeatedly never see large port numbers.
@@ -243,6 +246,7 @@ EXPORT(int, sceAudioOutOutput, int port, const void *buf) {
         return RET_ERROR(SCE_AUDIO_OUT_ERROR_INVALID_PORT);
     }
     // is it really useful to update the thread status?
+    prt->last_thread_id = thread_id;
     thread->begin_host_wait();
     emuenv.audio.audio_output(*prt, buf);
     thread->end_host_wait();

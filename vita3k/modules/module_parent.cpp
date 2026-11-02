@@ -36,6 +36,11 @@
 #include <util/log.h>
 #include <util/string_utils.h>
 
+#include <array>
+#include <chrono>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <unordered_set>
 
 static constexpr bool LOG_UNK_NIDS_ALWAYS = false;
@@ -148,7 +153,89 @@ static void log_import_call(char emulation_level, uint32_t nid, SceUID thread_id
     }
 }
 
+// ---------------------------------------------------------------------------
+// Vita3K-BG diagnostics: keep the last few system calls made by the game's
+// sound threads, so when audio stops we can dump what the thread was doing.
+// Each guest thread runs on its own host thread, so a thread_local ring is cheap.
+// ---------------------------------------------------------------------------
+namespace {
+struct BgTraceEntry {
+    uint64_t time_us = 0;
+    uint32_t nid = 0;
+    uint32_t a0 = 0, a1 = 0, a2 = 0;
+    uint32_t ret = 0;
+    bool done = false;
+};
+struct BgTraceRing {
+    SceUID thread_id = 0;
+    std::string name;
+    std::array<BgTraceEntry, 64> entries{};
+    size_t next = 0;
+    std::mutex mutex;
+};
+std::mutex bg_trace_registry_mutex;
+std::map<SceUID, std::shared_ptr<BgTraceRing>> bg_trace_registry;
+
+uint64_t bg_now_us() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+bool bg_should_trace(const std::string &name) {
+    // the game's sound threads ("SHD_SOUND" etc.) plus anything audio-ish
+    return name.find("SOUND") != std::string::npos || name.find("Sound") != std::string::npos
+        || name.find("AUDIO") != std::string::npos || name.find("Audio") != std::string::npos
+        || name.find("BGM") != std::string::npos || name.find("STRM") != std::string::npos;
+}
+} // namespace
+
+void bg_dump_import_trace(SceUID thread_id) {
+    std::shared_ptr<BgTraceRing> ring;
+    {
+        const std::lock_guard<std::mutex> lock(bg_trace_registry_mutex);
+        auto it = bg_trace_registry.find(thread_id);
+        if (it == bg_trace_registry.end()) {
+            LOG_WARN("[Vita3K-BG] no call trace recorded for thread {}", thread_id);
+            return;
+        }
+        ring = it->second;
+    }
+    const std::lock_guard<std::mutex> lock(ring->mutex);
+    const uint64_t now = bg_now_us();
+    LOG_WARN("[Vita3K-BG] ---- last system calls of thread '{}' ({}), oldest first ----", ring->name, thread_id);
+    for (size_t i = 0; i < ring->entries.size(); i++) {
+        const BgTraceEntry &e = ring->entries[(ring->next + i) % ring->entries.size()];
+        if (e.nid == 0)
+            continue;
+        if (e.done)
+            LOG_WARN("[Vita3K-BG]   -{:>7} ms  {} ({}, {}, {}) = {}", (now - e.time_us) / 1000, import_name(e.nid), log_hex(e.a0), log_hex(e.a1), log_hex(e.a2), log_hex(e.ret));
+        else
+            LOG_WARN("[Vita3K-BG]   -{:>7} ms  {} ({}, {}, {}) = STILL RUNNING (thread is stuck here)", (now - e.time_us) / 1000, import_name(e.nid), log_hex(e.a0), log_hex(e.a1), log_hex(e.a2));
+    }
+    LOG_WARN("[Vita3K-BG] ---- end of trace ----");
+}
+
 void call_import(EmuEnvState &emuenv, CPUState &cpu, uint32_t nid, SceUID thread_id) {
+    thread_local std::shared_ptr<BgTraceRing> bg_ring;
+    thread_local bool bg_checked = false;
+    if (!bg_checked) {
+        bg_checked = true;
+        const ThreadStatePtr t = emuenv.kernel.get_thread(thread_id);
+        if (t && bg_should_trace(t->name)) {
+            bg_ring = std::make_shared<BgTraceRing>();
+            bg_ring->thread_id = thread_id;
+            bg_ring->name = t->name;
+            const std::lock_guard<std::mutex> lock(bg_trace_registry_mutex);
+            bg_trace_registry[thread_id] = bg_ring;
+        }
+    }
+    BgTraceEntry *bg_entry = nullptr;
+    if (bg_ring) {
+        const std::lock_guard<std::mutex> lock(bg_ring->mutex);
+        bg_entry = &bg_ring->entries[bg_ring->next];
+        bg_ring->next = (bg_ring->next + 1) % bg_ring->entries.size();
+        *bg_entry = BgTraceEntry{ bg_now_us(), nid, read_reg(cpu, 0), read_reg(cpu, 1), read_reg(cpu, 2), 0, false };
+    }
+
     // HLE - call our C++ function
     if (emuenv.kernel.debugger.watch_import_calls) {
         const std::unordered_set<uint32_t> hle_nid_blacklist = {
@@ -171,6 +258,15 @@ void call_import(EmuEnvState &emuenv, CPUState &cpu, uint32_t nid, SceUID thread
             LOG_ERROR("Import function for NID {} not found (thread name: {}, thread ID: {})", log_hex(nid), thread->name, thread_id);
             if (!LOG_UNK_NIDS_ALWAYS)
                 emuenv.missing_nids.insert(nid);
+        }
+    }
+
+    if (bg_entry) {
+        const std::lock_guard<std::mutex> lock(bg_ring->mutex);
+        // only finish the entry if it wasn't overwritten by nested calls (callbacks)
+        if (bg_entry->nid == nid) {
+            bg_entry->ret = read_reg(cpu, 0);
+            bg_entry->done = true;
         }
     }
 }
