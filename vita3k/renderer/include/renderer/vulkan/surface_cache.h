@@ -160,6 +160,15 @@ struct SurfaceRetrieveResult {
 };
 
 class VKSurfaceCache {
+public:
+    // Vita3K-BG diagnostics: the render target matched by the last successful
+    // retrieve_color_surface_as_texture call
+    uint32_t bg_last_match_addr = 0;
+    uint32_t bg_last_match_bytes = 0;
+    uint32_t bg_last_match_width = 0;
+    uint32_t bg_last_match_height = 0;
+    int bg_last_match_format = 0;
+
 private:
     VKState &state;
 

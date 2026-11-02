@@ -579,6 +579,12 @@ std::optional<TextureLookupResult> VKSurfaceCache::retrieve_color_surface_as_tex
     // We should be able to use this texture, so set it as mru
     color_surface_queue.set_as_mru(&info);
 
+    bg_last_match_addr = ite->first;
+    bg_last_match_bytes = info.total_bytes;
+    bg_last_match_width = info.original_width;
+    bg_last_match_height = info.original_height;
+    bg_last_match_format = static_cast<int>(info.format);
+
     const vk::ImageView color_handle_view = reinterpret_cast<VKContext *>(state.context)->current_color_view;
     const bool is_same_image = (color_handle_view == info.texture.view) || (color_handle_view == info.alternate_view)
         || (info.gamma_view && color_handle_view == info.gamma_view);

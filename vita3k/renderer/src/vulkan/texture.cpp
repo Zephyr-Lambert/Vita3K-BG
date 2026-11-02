@@ -25,7 +25,12 @@
 #include <gxm/types.h>
 #include <renderer/functions.h>
 #include <util/align.h>
+#include <util/log.h>
 #include <vkutil/vkutil.h>
+
+#include <cstdlib>
+#include <set>
+#include <utility>
 
 namespace renderer::vulkan {
 
@@ -112,9 +117,31 @@ void sync_texture(VKContext &context, MemState &mem, std::size_t index, SceGxmTe
 
     TextureViewport texture_viewport{};
 
-    if (renderer::texture::convert_base_texture_format_to_base_color_format(base_format, format_target_of_texture)) {
+    // Vita3K-BG test switch: VITA3K_BG_NO_SURFACE_TEXTURES=1 disables using cached
+    // render targets in place of textures
+    static const bool bg_no_surface_textures = [] {
+        const char *v = std::getenv("VITA3K_BG_NO_SURFACE_TEXTURES");
+        const bool on = v && v[0] == '1';
+        if (on)
+            LOG_WARN("[Vita3K-BG] render targets will NOT be used as textures (VITA3K_BG_NO_SURFACE_TEXTURES=1)");
+        return on;
+    }();
+
+    if (!bg_no_surface_textures && renderer::texture::convert_base_texture_format_to_base_color_format(base_format, format_target_of_texture)) {
         // try to retrieve it from the color surface cache
         lookup_result = context.state.surface_cache.retrieve_color_surface_as_texture(texture, format_target_of_texture, &texture_viewport);
+        if (lookup_result.has_value()) {
+            // Vita3K-BG diagnostics: log each distinct texture -> render target substitution once
+            static std::set<std::pair<uint32_t, uint32_t>> bg_seen;
+            const auto &sc = context.state.surface_cache;
+            const uint32_t tex_addr = texture.data_addr << 2;
+            if (bg_seen.size() < 300 && bg_seen.insert({ tex_addr, sc.bg_last_match_addr }).second)
+                LOG_WARN("[Vita3K-BG] texture {} ({}x{} fmt {} type {}) drawn from render target {} ({}x{} fmt {} {} bytes){}",
+                    log_hex(tex_addr), gxm::get_width(texture), gxm::get_height(texture), log_hex(static_cast<uint32_t>(format)),
+                    log_hex(static_cast<uint32_t>(texture.texture_type())),
+                    log_hex(sc.bg_last_match_addr), sc.bg_last_match_width, sc.bg_last_match_height, sc.bg_last_match_format,
+                    sc.bg_last_match_bytes, tex_addr == sc.bg_last_match_addr ? "" : " [offset match]");
+        }
     }
 
     bool is_depth_surface = false;
