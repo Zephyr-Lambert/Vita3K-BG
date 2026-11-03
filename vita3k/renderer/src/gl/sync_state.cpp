@@ -368,6 +368,12 @@ void sync_texture(GLState &state, GLContext &context, MemState &mem, std::size_t
     if (texture_as_surface != 0) {
         glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(texture_as_surface));
 
+        // Apply the game's addressing mode. Render targets used as textures never had their wrap
+        // mode set, so they used OpenGL's default (GL_REPEAT). Projected textures that rely on
+        // clamping, like Bullet Girls' character shadow, then tiled across the whole stage.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, texture::translate_wrap_mode(static_cast<SceGxmTextureAddrMode>(texture.uaddr_mode)));
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, texture::translate_wrap_mode(static_cast<SceGxmTextureAddrMode>(texture.vaddr_mode)));
+
         if (only_nearest) {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);

@@ -74,6 +74,20 @@ int main(int argc, char *argv[]) {
     qputenv("QT_MAC_NO_CONTAINER_LAYER", "1");
 #endif
 
+#if defined(__linux__) && !defined(__ANDROID__)
+    // Vita3K-BG: on Wayland desktops, the OpenGL game window may never present its frames (the
+    // desktop behind it shows through, seen with NVIDIA). Prefer X11 through XWayland when it is
+    // available and the user hasn't picked a Qt platform. Vulkan works the same through X11.
+    // Set VITA3K_BG_WAYLAND=1 to keep the native Wayland backend.
+    {
+        const char *bg_keep_wayland = std::getenv("VITA3K_BG_WAYLAND");
+        const bool keep_wayland = bg_keep_wayland && bg_keep_wayland[0] == '1';
+        if (!keep_wayland && qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")
+            && !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY") && !qEnvironmentVariableIsEmpty("DISPLAY"))
+            qputenv("QT_QPA_PLATFORM", "xcb");
+    }
+#endif
+
     QCoreApplication::setOrganizationName(QStringLiteral("Vita3K"));
     QCoreApplication::setApplicationName(QStringLiteral("Vita3K"));
 

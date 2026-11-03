@@ -7,6 +7,10 @@
 > **Fixed so far**
 > - Audio cutting out about 1:45 into a mission, followed by the game hanging at mission end
 >   (`sceAudiodecPartlyDecode` wrote past the game's output buffer at music loop points).
+> - OpenGL: extra copies of the character's shadow on walls and the ground
+>   (render targets used as textures ignored the game's wrap mode and repeated).
+> - OpenGL: on Wayland desktops the game window showed the desktop behind it.
+>   The build now uses X11 through XWayland automatically (set `VITA3K_BG_WAYLAND=1` to opt out).
 >
 > **Known issues**
 > - On Vulkan, stage textures are misaligned (characters and menus are fine). Use the OpenGL renderer for now.
