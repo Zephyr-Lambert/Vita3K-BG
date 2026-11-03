@@ -1337,6 +1337,8 @@ static SpirvShaderParameters create_parameters(spv::Builder &b, const SceGxmProg
                            // GXP literals are register payloads. A float constant can be folded to a
                            // denormal literal and flushed before a later integer bitcast on Metal.
                            const spv::Id bits = b.makeUintConstant(s.data_bits);
+                           if (input.bank == RegisterBank::SECATTR)
+                               spv_params.literal_sa_bits[input.offset] = s.data_bits;
                            literal_pairs.emplace_back(input.offset,
                                b.createUnaryOp(spv::OpBitcast, f32_type, bits));
                            // Pair sort automatically sort offset for us
