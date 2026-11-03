@@ -38,8 +38,20 @@ void set_uniform_buffer(VKContext &context, MemState &mem, const ShaderProgram *
     const uint32_t data_size_upload = std::min<uint32_t>(size, program->uniform_buffer_sizes.at(block_num) * 4);
     if (context.state.features.enable_memory_mapping) {
         if (context.state.mapping_method == MappingMethod::DoubleBuffer) {
+            // Vita3K-BG test switch: VITA3K_BG_UB_SYNC_BYTES=<n> syncs at least n bytes from the
+            // start of each uniform buffer. Shaders can index past the size they declare (Bullet
+            // Girls reads a per-vertex UV offset table that way), and anything past the synced
+            // range is read from a stale GPU copy of guest memory.
+            static const uint32_t bg_min_sync = [] {
+                const char *v = std::getenv("VITA3K_BG_UB_SYNC_BYTES");
+                const uint32_t n = v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0;
+                if (n)
+                    LOG_WARN("[Vita3K-BG] syncing at least {} bytes of every uniform buffer (VITA3K_BG_UB_SYNC_BYTES)", n);
+                return n;
+            }();
+            const uint32_t sync_size = std::max<uint32_t>(data_size_upload, bg_min_sync);
             // we must always cover everything as some small part of the buffer may get changed only
-            context.state.buffer_trapping.access_buffer(data.address(), data_size_upload, mem, false, true);
+            context.state.buffer_trapping.access_buffer(data.address(), sync_size, mem, false, true);
         }
 
         const uint64_t buffer_address = context.state.get_matching_device_address(data.address());
