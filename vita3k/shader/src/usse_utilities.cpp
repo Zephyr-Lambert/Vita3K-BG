@@ -1022,22 +1022,6 @@ spv::Id load(spv::Builder &b, const SpirvShaderParameters &params, SpirvUtilFunc
     const auto dest_comp_count = dest_mask_to_comp_count(dest_mask);
     const std::size_t size_comp = get_data_type_size(op.type);
 
-    // Vita3K-BG fix: integer read of an 'sa' register that holds a GXP literal: use the exact
-    // literal bits. Going through the float register file lets drivers flush denormal bit
-    // patterns (e.g. the 0x00010020 address offsets Bullet Girls uses) to zero.
-    if (op.bank == RegisterBank::SECATTR && (op.type == DataType::INT32 || op.type == DataType::UINT32)
-        && dest_comp_count == 1 && !params.literal_sa_bits.empty()) {
-        const int swz = static_cast<int>(op.swizzle[0]) - static_cast<int>(SwizzleChannel::C_X);
-        if (swz >= 0 && swz < 4) {
-            const auto it = params.literal_sa_bits.find(static_cast<uint32_t>(op.num + shift_offset + swz));
-            if (it != params.literal_sa_bits.end()) {
-                const spv::Id constant = (op.type == DataType::UINT32) ? b.makeUintConstant(it->second)
-                                                                       : b.makeIntConstant(static_cast<int>(it->second));
-                return apply_modifiers(b, utils, op.flags, constant);
-            }
-        }
-    }
-
     if (op.bank == RegisterBank::PREDICATE || op.bank == RegisterBank::INDEX) {
         spv::Id bank_base = *get_reg_bank(params, op.bank);
         if (op.bank == RegisterBank::INDEX) {
@@ -1302,12 +1286,6 @@ void store(spv::Builder &b, const SpirvShaderParameters &params, SpirvUtilFuncti
     if (source == spv::NoResult) {
         LOG_WARN("Source invalid");
         return;
-    }
-
-    // Vita3K-BG: the shader overwrites an 'sa' register, it no longer holds its literal
-    if (dest.bank == RegisterBank::SECATTR && !params.literal_sa_bits.empty()) {
-        for (int i = -4; i < 8; i++)
-            params.literal_sa_bits.erase(static_cast<uint32_t>(dest.num + off + i));
     }
 
     // Check for INDEX bank. INDEX bank are optimized to store an integer

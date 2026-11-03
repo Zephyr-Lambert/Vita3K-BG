@@ -22,7 +22,6 @@
 #include <util/log.h>
 
 #include <algorithm>
-#include <bit>
 #include <map>
 #include <tuple>
 
@@ -352,7 +351,7 @@ ProgramInput get_program_input(const SceGxmProgram &program) {
     if (container) {
         for (std::uint32_t i = 0; i < program.literals_count; ++i) {
             LiteralInputSource source;
-            source.data_bits = std::bit_cast<std::uint32_t>(literals[i].data);
+            source.data = literals[i].data;
 
             Input item;
             item.component_count = 1;

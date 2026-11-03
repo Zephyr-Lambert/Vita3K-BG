@@ -20,15 +20,12 @@
 #include <renderer/profile.h>
 #include <renderer/texture_cache.h>
 
-#include <map>
-
 #include <gxm/functions.h>
 #include <mem/ptr.h>
 #include <util/align.h>
 #include <util/log.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #if defined(__x86_64__) && !defined(__APPLE__)
@@ -292,12 +289,6 @@ using namespace texture;
 
 bool TextureCache::init(const bool hashless_texture_cache, const fs::path &texture_folder, std::string_view game_id, const size_t sampler_cache_size) {
     use_protect = hashless_texture_cache;
-    // Vita3K-BG test switch: VITA3K_BG_HASH_TEXTURES=1 detects texture changes by
-    // content hash only (no memory page protection)
-    if (const char *v = std::getenv("VITA3K_BG_HASH_TEXTURES"); v && v[0] == '1') {
-        use_protect = false;
-        LOG_WARN("[Vita3K-BG] texture cache: page protection disabled, using content hashes (VITA3K_BG_HASH_TEXTURES=1)");
-    }
 
     // initialize the texture queue
     texture_queue.init(TextureCacheSize);
@@ -738,33 +729,6 @@ void TextureCache::cache_and_bind_texture(const SceGxmTexture &gxm_texture, MemS
 
     if (gxm_texture.data_addr == 0) {
         upload = false;
-    }
-
-    // Vita3K-BG diagnostics: log new textures and re-uploads of already cached ones
-    {
-        static std::map<uint32_t, uint32_t> bg_reuploads;
-        static uint32_t bg_new_count = 0;
-        static uint32_t bg_lines = 0;
-        const uint32_t addr = gxm_texture.data_addr << 2;
-        if (upload && cached_gxm_texture_index == -1) {
-            bg_new_count++;
-            if (bg_lines < 400) {
-                bg_lines++;
-                LOG_WARN("[Vita3K-BG] new texture #{} at {} ({}x{} fmt {} type {} {} bytes, slot {}, {})",
-                    bg_new_count, log_hex(addr), gxm::get_width(gxm_texture), gxm::get_height(gxm_texture),
-                    log_hex(static_cast<uint32_t>(gxm::get_format(gxm_texture))), log_hex(static_cast<uint32_t>(gxm_texture.texture_type())),
-                    info->texture_size, index, info->use_hash ? "hashed" : "page-protected");
-            }
-        } else if (upload) {
-            const uint32_t n = ++bg_reuploads[addr];
-            if ((n <= 3 || n == 10 || n == 100 || n == 1000) && bg_lines < 400) {
-                bg_lines++;
-                LOG_WARN("[Vita3K-BG] RE-UPLOAD #{} of texture at {} ({}x{} fmt {} {} bytes, slot {}, {})",
-                    n, log_hex(addr), gxm::get_width(gxm_texture), gxm::get_height(gxm_texture),
-                    log_hex(static_cast<uint32_t>(gxm::get_format(gxm_texture))), info->texture_size, index,
-                    info->use_hash ? "content hash changed" : "memory marked dirty");
-            }
-        }
     }
 
     if (upload && !info->use_hash && (import_textures || export_textures)) {

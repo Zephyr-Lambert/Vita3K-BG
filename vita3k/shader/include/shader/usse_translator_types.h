@@ -77,12 +77,6 @@ struct SpirvShaderParameters {
     // Sampler map. Since all banks are a flat array, sampler must be in an explicit bank.
     SamplerMap samplers;
 
-    // Vita3K-BG: raw bits of GXP literals loaded into 'sa' registers (register index -> bits).
-    // Integer reads of these registers use the exact bits instead of going through a float
-    // register, where denormal patterns such as 0x00010020 can be flushed to zero by the driver.
-    // Entries are dropped when the shader writes the register.
-    mutable std::map<uint32_t, uint32_t> literal_sa_bits;
-
     // Uniform buffer map contains layout info of a UBO inside the big SSBO.
     // only used if memory mapping is not enabled
     std::map<std::uint32_t, SpirvUniformBufferInfo> buffers;

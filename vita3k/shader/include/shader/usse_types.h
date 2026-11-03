@@ -392,7 +392,8 @@ struct AttributeInputSource {
 };
 
 struct LiteralInputSource {
-    std::uint32_t data_bits;
+    // The constant data
+    float data;
 };
 
 struct UniformBufferInputSource {

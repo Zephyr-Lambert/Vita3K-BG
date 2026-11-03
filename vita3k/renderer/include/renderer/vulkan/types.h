@@ -16,8 +16,6 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #pragma once
-#include <array>
-#include <deque>
 
 #include <renderer/texture_cache.h>
 #include <renderer/types.h>
@@ -270,34 +268,6 @@ struct VKContext : public renderer::Context {
     shader::RenderFragUniformBlockExtended curr_frag_ublock;
 
     // scratch memory to contain the constructed render info uniform before copying it
-    // indices rebased on the draw's smallest index before being copied (draw, copy path)
-    std::vector<uint8_t> rebased_indices;
-
-    // RPCS3-style ring tracking: the heads of the rings at each submission, released once
-    // its fence has signaled so that the rings never overwrite data the GPU has not read yet
-    struct PendingSubmission {
-        vk::Fence fence;
-        std::array<uint64_t, 6> heads;
-    };
-    std::deque<PendingSubmission> pending_submissions;
-    std::array<vkutil::RingBuffer *, 6> rings() {
-        return { &vertex_stream_ring_buffer, &index_stream_ring_buffer, &vertex_uniform_stream_ring_buffer,
-            &fragment_uniform_stream_ring_buffer, &vertex_info_uniform_buffer, &fragment_info_uniform_buffer };
-    }
-    std::array<uint64_t, 6> ring_heads() {
-        std::array<uint64_t, 6> heads;
-        const auto all = rings();
-        for (size_t i = 0; i < all.size(); i++)
-            heads[i] = all[i]->get_head();
-        return heads;
-    }
-    void release_rings(const std::array<uint64_t, 6> &heads) {
-        const auto all = rings();
-        for (size_t i = 0; i < all.size(); i++)
-            all[i]->release_until(heads[i]);
-    }
-    // waits for the oldest pending submission and releases its ring data; false if none is pending
-    bool wait_oldest_submission();
     uint8_t shader_info_temp[std::max(shader::RenderVertUniformBlockExtended::get_max_size(), shader::RenderFragUniformBlockExtended::get_max_size())];
 
     // used to implement the Visibility Buffer
@@ -367,9 +337,6 @@ struct VKContext : public renderer::Context {
     uint16_t last_macroblock_y = ~0;
     // special case where we can't determine the current macroblock
     bool ignore_macroblock = false;
-    // Vita3K-BG: depth/stencil of macroblocks never cleared this scene must be
-    // cleared when switching to the full-screen (ignore_macroblock) path
-    bool bg_pending_macroblock_clear = false;
 
     // used if necessary to restart easily the render pass
     vk::RenderPassBeginInfo curr_renderpass_info;

@@ -26,11 +26,7 @@
 #include <shader/spirv_recompiler.h>
 
 #include <util/log.h>
-
-#include <algorithm>
-#include <cstdlib>
 #include <util/overloaded.h>
-#include <vector>
 
 namespace renderer::vulkan {
 
@@ -241,7 +237,6 @@ void set_context(VKContext &context, MemState &mem, VKRenderTarget *rt, const Fe
     context.last_macroblock_x = ~0;
     context.last_macroblock_y = ~0;
     context.ignore_macroblock = false;
-    context.bg_pending_macroblock_clear = false;
 }
 
 void VKContext::start_recording(bool first_in_scene) {
@@ -415,33 +410,6 @@ void VKContext::start_render_pass(bool create_descriptor_set, bool maskupdate) {
         const vk::ClearAttachment clear{ .aspectMask = macroblock_clear, .clearValue = curr_clear_values[1] };
         const vk::ClearRect rect{ .rect = curr_renderpass_info.renderArea, .layerCount = 1 };
         render_cmd.clearAttachments(clear, rect);
-    }
-
-    // Vita3K-BG fix: see check_for_macroblock_change
-    if (!maskupdate && bg_pending_macroblock_clear && ignore_macroblock) {
-        bg_pending_macroblock_clear = false;
-        if (initial_depth_stencil_clear) {
-            const vk::ClearAttachment clear{ .aspectMask = initial_depth_stencil_clear, .clearValue = curr_clear_values[1] };
-            std::vector<vk::ClearRect> rects;
-            const uint32_t mb_w = render_target->macroblock_width;
-            const uint32_t mb_h = render_target->macroblock_height;
-            for (uint32_t y = 0; y < 4 && mb_h && y * mb_h < render_target->height; y++) {
-                for (uint32_t x = 0; x < 4 && mb_w && x * mb_w < render_target->width; x++) {
-                    const uint16_t bit = 1U << (x + 4 * y);
-                    if (initialized_macroblocks & bit)
-                        continue;
-                    const uint32_t w = std::min(mb_w, render_target->width - x * mb_w);
-                    const uint32_t h = std::min(mb_h, render_target->height - y * mb_h);
-                    rects.push_back(vk::ClearRect{
-                        .rect = vk::Rect2D{ .offset = { static_cast<int32_t>(x * mb_w), static_cast<int32_t>(y * mb_h) }, .extent = { w, h } },
-                        .baseArrayLayer = 0,
-                        .layerCount = 1 });
-                }
-            }
-            if (!rects.empty())
-                render_cmd.clearAttachments(clear, rects);
-        }
-        initialized_macroblocks = 0xFFFF;
     }
 
     // set the renderpass info ready in case we need to switch between classic and framebuffer fetch usage
@@ -690,9 +658,6 @@ void VKContext::stop_recording(const SceGxmNotification &notif1, const SceGxmNot
     }
     cmdbuffers_to_submit.clear();
     state.frame().rendered_fences.push_back(fence);
-    // the ring buffers (info uniforms in every mode) release this work's data once the fence signals
-    if (fence)
-        pending_submissions.push_back({ fence, ring_heads() });
 
     if (state.features.enable_memory_mapping) {
         // send it to the wait queue
@@ -734,26 +699,6 @@ void VKContext::check_for_macroblock_change(bool is_draw) {
         ignore_macroblock = true;
         // in this case we must load and store the depth stencil each time
         current_render_pass = state.pipeline_cache.retrieve_render_pass(current_color_format, true, true, !record.color_surface.data);
-
-        // Vita3K-BG fix: the full-screen passes below LOAD depth/stencil everywhere,
-        // but macroblocks not drawn yet this scene were never cleared (or, if this is
-        // the first draw, nothing was cleared at all), so they kept stale depth from a
-        // previous frame. Clear them at the start of the next render pass.
-        static const bool bg_disable_fix = [] {
-            const char *v = std::getenv("VITA3K_BG_NO_MACROBLOCK_FIX");
-            return v && v[0] == '1';
-        }();
-        if (!bg_disable_fix)
-            bg_pending_macroblock_clear = true;
-
-        static int bg_logged = 0;
-        if (bg_logged < 5) {
-            bg_logged++;
-            LOG_WARN("[Vita3K-BG] macroblock render target {}x{} (blocks {}x{}): scissor {}x{} at {},{} spans several blocks, using full-screen path (already cleared blocks: {:#06x}){}",
-                render_target->width, render_target->height, render_target->macroblock_width, render_target->macroblock_height,
-                scissor.extent.width, scissor.extent.height, scissor.offset.x, scissor.offset.y, initialized_macroblocks,
-                bg_disable_fix ? " [fix disabled]" : "");
-        }
     }
 
     // use the scissor to know in which macroblock we are
@@ -777,17 +722,6 @@ void VKContext::check_for_macroblock_change(bool is_draw) {
             }
         }
     }
-}
-
-bool VKContext::wait_oldest_submission() {
-    if (pending_submissions.empty())
-        return false;
-    const PendingSubmission oldest = pending_submissions.front();
-    pending_submissions.pop_front();
-    if (state.device.waitForFences(oldest.fence, VK_TRUE, std::numeric_limits<uint64_t>::max()) != vk::Result::eSuccess)
-        LOG_ERROR("Could not wait for a submission fence to free ring buffer space");
-    release_rings(oldest.heads);
-    return true;
 }
 
 void new_frame(VKContext &context) {
@@ -825,13 +759,6 @@ void new_frame(VKContext &context) {
                 assert(false);
                 return;
             }
-        }
-
-        // these submissions are done: release their ring data before their fences get reset and reused
-        while (!context.pending_submissions.empty()
-            && std::ranges::find(frame.rendered_fences, context.pending_submissions.front().fence) != frame.rendered_fences.end()) {
-            context.release_rings(context.pending_submissions.front().heads);
-            context.pending_submissions.pop_front();
         }
 
         // reset the fences in both case (the wait thread does not do that as they can still be used)

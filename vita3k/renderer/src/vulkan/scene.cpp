@@ -25,8 +25,6 @@
 
 #include <util/log.h>
 
-#include <cstdlib>
-
 namespace renderer::vulkan {
 
 void set_uniform_buffer(VKContext &context, MemState &mem, const ShaderProgram *program, const bool vertex_shader, const int block_num, const int size, Ptr<uint8_t> data) {
@@ -38,20 +36,8 @@ void set_uniform_buffer(VKContext &context, MemState &mem, const ShaderProgram *
     const uint32_t data_size_upload = std::min<uint32_t>(size, program->uniform_buffer_sizes.at(block_num) * 4);
     if (context.state.features.enable_memory_mapping) {
         if (context.state.mapping_method == MappingMethod::DoubleBuffer) {
-            // Vita3K-BG test switch: VITA3K_BG_UB_SYNC_BYTES=<n> syncs at least n bytes from the
-            // start of each uniform buffer. Shaders can index past the size they declare (Bullet
-            // Girls reads a per-vertex UV offset table that way), and anything past the synced
-            // range is read from a stale GPU copy of guest memory.
-            static const uint32_t bg_min_sync = [] {
-                const char *v = std::getenv("VITA3K_BG_UB_SYNC_BYTES");
-                const uint32_t n = v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0;
-                if (n)
-                    LOG_WARN("[Vita3K-BG] syncing at least {} bytes of every uniform buffer (VITA3K_BG_UB_SYNC_BYTES)", n);
-                return n;
-            }();
-            const uint32_t sync_size = std::max<uint32_t>(data_size_upload, bg_min_sync);
             // we must always cover everything as some small part of the buffer may get changed only
-            context.state.buffer_trapping.access_buffer(data.address(), sync_size, mem, false, true);
+            context.state.buffer_trapping.access_buffer(data.address(), data_size_upload, mem, false, true);
         }
 
         const uint64_t buffer_address = context.state.get_matching_device_address(data.address());
@@ -195,20 +181,6 @@ static void draw_bind_descriptors(VKContext &context, MemState &mem) {
     bool need_vert_descr = (vertex_textures_count != context.last_vert_texture_count);
     bool need_frag_descr = (fragment_texture_count != context.last_frag_texture_count);
 
-    // Vita3K-BG test switch: VITA3K_BG_FRESH_DESCRIPTORS=1 writes a fresh texture
-    // descriptor set for every draw instead of reusing the previous one
-    static const bool bg_fresh_descriptors = [] {
-        const char *v = std::getenv("VITA3K_BG_FRESH_DESCRIPTORS");
-        const bool on = v && v[0] == '1';
-        if (on)
-            LOG_WARN("[Vita3K-BG] writing fresh texture descriptors for every draw (VITA3K_BG_FRESH_DESCRIPTORS=1)");
-        return on;
-    }();
-    if (bg_fresh_descriptors) {
-        need_vert_descr = true;
-        need_frag_descr = true;
-    }
-
     context.last_vert_texture_count = vertex_textures_count;
     context.last_frag_texture_count = fragment_texture_count;
 
@@ -278,9 +250,7 @@ static void draw_bind_descriptors(VKContext &context, MemState &mem) {
 }
 
 // vertex count is only used with double buffer mapping
-// base_index: smallest index of the draw when its indices were rebased on it (copy path only): per-vertex
-// streams then start at that vertex instead of vertex 0.
-static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t instance_count, uint32_t max_index, uint32_t base_index = 0) {
+static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t instance_count, uint32_t max_index) {
     GxmRecordState &state = context.record;
     const SceGxmVertexProgram &vertex_program = *state.vertex_program.get(mem);
     VertexProgram *vkvert = vertex_program.renderer_data.get();
@@ -329,11 +299,6 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
             } else {
                 const uint8_t *stream = state.vertex_streams[i].data.get(mem);
                 uint32_t stream_size = state.vertex_streams[i].size;
-                if (base_index != 0 && !gxm::is_stream_instancing(static_cast<SceGxmIndexSource>(vertex_program.streams[i].indexSource))) {
-                    const uint32_t skip = std::min<uint32_t>(base_index * vertex_program.streams[i].stride, stream_size);
-                    stream += skip;
-                    stream_size -= skip;
-                }
 #ifdef __APPLE__
                 // Vulkan allows any stride, but Metal only allows multiples of 4.
                 const bool restride = vertex_program.streams[i].stride % 4 != 0;
@@ -342,8 +307,6 @@ static void bind_vertex_streams(VKContext &context, MemState &mem, uint32_t inst
                 }
 #endif
                 context.vertex_stream_ring_buffer.allocate(context.prerender_cmd, stream_size, stream);
-                // the ring may have been replaced by a larger buffer (RingBuffer::grow)
-                context.vertex_stream_buffers[i] = context.vertex_stream_ring_buffer.handle();
                 context.vertex_stream_offsets[i] = context.vertex_stream_ring_buffer.data_offset;
 
 #ifdef __APPLE__
@@ -613,45 +576,12 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
         context.render_cmd.bindIndexBuffer(buffer, offset, index_type);
     } else if (!ordered_indices) {
         const size_t index_buffer_size = index_size * count;
-        // Copy only the vertex range the draw uses: rebase the indices on the smallest one, so the vertex
-        // streams are copied from that vertex instead of vertex 0. A draw using a few vertices at the end of a
-        // large buffer otherwise copies the whole buffer, and the ring wraps over data not yet consumed.
-        uint32_t min_index = UINT32_MAX;
-        if (format == SCE_GXM_INDEX_FORMAT_U16) {
-            const uint16_t *data = static_cast<const uint16_t *>(indices_ptr);
-            for (size_t i = 0; i < count; i++)
-                min_index = std::min<uint32_t>(min_index, data[i]);
-        } else {
-            const uint32_t *data = static_cast<const uint32_t *>(indices_ptr);
-            for (size_t i = 0; i < count; i++)
-                min_index = std::min<uint32_t>(min_index, data[i]);
-        }
-        if (count == 0 || instance_count > 1)
-            min_index = 0;
-        if (min_index == 0) {
-            context.index_stream_ring_buffer.allocate(context.prerender_cmd, index_buffer_size, indices_ptr);
-        } else {
-            context.rebased_indices.resize(index_buffer_size);
-            if (format == SCE_GXM_INDEX_FORMAT_U16) {
-                const uint16_t *data = static_cast<const uint16_t *>(indices_ptr);
-                uint16_t *out = reinterpret_cast<uint16_t *>(context.rebased_indices.data());
-                for (size_t i = 0; i < count; i++)
-                    out[i] = static_cast<uint16_t>(data[i] - min_index);
-            } else {
-                const uint32_t *data = static_cast<const uint32_t *>(indices_ptr);
-                uint32_t *out = reinterpret_cast<uint32_t *>(context.rebased_indices.data());
-                for (size_t i = 0; i < count; i++)
-                    out[i] = data[i] - min_index;
-            }
-            context.index_stream_ring_buffer.allocate(context.prerender_cmd, index_buffer_size, context.rebased_indices.data());
-        }
+        context.index_stream_ring_buffer.allocate(context.prerender_cmd, index_buffer_size, indices_ptr);
         context.render_cmd.bindIndexBuffer(context.index_stream_ring_buffer.handle(), context.index_stream_ring_buffer.data_offset, index_type);
-        bind_vertex_streams(context, mem, instance_count, max_index, min_index);
     }
 
-    // bind the vertex streams (the copy path above already did)
-    if (use_memory_mapping)
-        bind_vertex_streams(context, mem, instance_count, max_index);
+    // bind the vertex streams
+    bind_vertex_streams(context, mem, instance_count, max_index);
 
     if (ordered_fetch) {
         if (ordered_indices) {
