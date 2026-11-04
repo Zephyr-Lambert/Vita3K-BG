@@ -1857,22 +1857,26 @@ static spv::Function *make_vert_finalize_function(spv::Builder &b, const SpirvSh
                     z_offset = b.createLoad(z_offset, spv::NoPrecision);
                     z_scale = b.createLoad(z_scale, spv::NoPrecision);
 
-                    // screen_z = z_offset + z_scale * (z / w)
-                    z = b.createBinOp(spv::OpFDiv, f32, z, w);
+                    // screen_z = z_offset + z_scale * (z / w), written directly in clip space:
+                    // clip_z = z_offset * w + z_scale * z
+                    // This used to divide by w, clamp, then multiply by w again. For a vertex
+                    // behind the camera (w < 0) that produced a wrong clip-space depth, so the
+                    // GPU clipped large polygons crossing the camera plane at the wrong place
+                    // and cut triangular holes into nearby walls and floors (Bullet Girls).
                     z = b.createBinOp(spv::OpFMul, f32, z, z_scale);
-                    z = b.createBinOp(spv::OpFAdd, f32, z, z_offset);
+                    z = b.createBinOp(spv::OpFAdd, f32, z, b.createBinOp(spv::OpFMul, f32, z_offset, w));
 
-                    // z values below 0 get clamped
-                    z = b.createBuiltinCall(f32, utils.std_builtins, GLSLstd450FMax, { z, zero });
+                    // z values below 0 get clamped, only for vertices in front of the camera
+                    // (equivalent to the previous behaviour when w > 0)
+                    const spv::Id clamped = b.createBuiltinCall(f32, utils.std_builtins, GLSLstd450FMax, { z, zero });
+                    const spv::Id in_front = b.createBinOp(spv::OpFOrdGreaterThan, b.makeBoolType(), w, zero);
+                    z = b.createTriOp(spv::OpSelect, f32, in_front, clamped, z);
 
                     if (!translation_state.is_vulkan) {
-                        // convert [0,1] depth range (gxp, vulkan) to [-1,1] depth range (opengl)
+                        // convert [0,1] depth range (gxp, vulkan) to [-1,1] depth range (opengl), in clip space
                         z = b.createBinOp(spv::OpFMul, f32, z, b.makeFloatConstant(2.0f));
-                        z = b.createBinOp(spv::OpFAdd, f32, z, b.makeFloatConstant(-1.0f));
+                        z = b.createBinOp(spv::OpFSub, f32, z, w);
                     }
-
-                    // multiply by w because it will be re-divided by w during screen normalization
-                    z = b.createBinOp(spv::OpFMul, f32, z, w);
 
                     b.createStore(z, z_ref);
                 }

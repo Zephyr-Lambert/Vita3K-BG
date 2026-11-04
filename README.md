@@ -11,6 +11,9 @@
 >   (render targets used as textures ignored the game's wrap mode and repeated).
 > - OpenGL: on Wayland desktops the game window showed the desktop behind it.
 >   The build now uses X11 through XWayland automatically (set `VITA3K_BG_WAYLAND=1` to opt out).
+> - Both renderers: triangular holes cut into walls and floors near the camera at certain
+>   distances. Vertex depth was converted with a divide/clamp/multiply by w that broke clipping for
+>   polygons with corners behind the camera.
 >
 > **Known issues**
 > - On Vulkan, stage textures are misaligned (characters and menus are fine). Use the OpenGL renderer for now.
