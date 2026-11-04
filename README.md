@@ -11,8 +11,6 @@
 >   (render targets used as textures ignored the game's wrap mode and repeated).
 > - OpenGL: on Wayland desktops the game window showed the desktop behind it.
 >   The build now uses X11 through XWayland automatically (set `VITA3K_BG_WAYLAND=1` to opt out).
-> - OpenGL: some walls disappearing at certain distances and camera angles. OpenGL doesn't
->   emulate the game's visibility (occlusion) tests, so they are now reported as "visible".
 >
 > **Known issues**
 > - On Vulkan, stage textures are misaligned (characters and menus are fine). Use the OpenGL renderer for now.

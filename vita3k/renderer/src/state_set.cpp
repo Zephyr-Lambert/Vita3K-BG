@@ -27,8 +27,6 @@
 
 #include <renderer/vulkan/functions.h>
 #include <renderer/vulkan/state.h>
-
-#include <algorithm>
 #include <renderer/vulkan/types.h>
 
 #include <util/align.h>
@@ -520,8 +518,6 @@ COMMAND_SET_STATE(visibility_buffer) {
 
     if (renderer.current_backend == Backend::Vulkan) {
         vulkan::sync_visibility_buffer(*reinterpret_cast<vulkan::VKContext *>(render_context), buffer, stride);
-    } else if (renderer.current_backend == Backend::OpenGL) {
-        reinterpret_cast<gl::GLContext *>(render_context)->bg_visibility_buffer = buffer;
     }
 }
 
@@ -533,20 +529,6 @@ COMMAND_SET_STATE(visibility_index) {
 
     if (renderer.current_backend == Backend::Vulkan) {
         vulkan::sync_visibility_index(*reinterpret_cast<vulkan::VKContext *>(render_context), enable, index, is_increment);
-    } else if (renderer.current_backend == Backend::OpenGL) {
-        // Vita3K-BG: OpenGL doesn't emulate visibility (occlusion) tests, so the game read
-        // whatever was left in its visibility buffer, often 0, and culled objects it thought
-        // were hidden (walls disappearing at some distances and angles in Bullet Girls).
-        // Report every enabled test as visible instead: nothing gets culled wrongly, at the
-        // cost of drawing objects that really were hidden.
-        const Ptr<uint32_t> buffer = reinterpret_cast<gl::GLContext *>(render_context)->bg_visibility_buffer;
-        if (enable && buffer) {
-            uint32_t *result = buffer.get(mem) + index;
-            if (is_increment)
-                *result = std::max<uint32_t>(*result, 0x10000);
-            else
-                *result = 1;
-        }
     }
 }
 

@@ -19,7 +19,6 @@
 
 #include <glutil/object.h>
 #include <glutil/object_array.h>
-#include <mem/ptr.h>
 #include <renderer/types.h>
 #include <util/hash.h>
 
@@ -66,10 +65,6 @@ struct GLRenderTarget;
 
 struct GLContext : public renderer::Context {
     GLObjectArray<1> vertex_array;
-
-    // Vita3K-BG: visibility buffer set by the game. OpenGL doesn't emulate visibility tests,
-    // so enabled tests are reported as visible (see cmd_set_state_visibility_index).
-    Ptr<uint32_t> bg_visibility_buffer;
 
     RingBuffer vertex_stream_ring_buffer;
     RingBuffer index_stream_ring_buffer;
