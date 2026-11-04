@@ -33,6 +33,8 @@
 
 #include <spdlog/fmt/bin_to_hex.h>
 
+#include <cstdlib>
+
 namespace renderer::gl {
 static GLenum translate_primitive(SceGxmPrimitiveType primType) {
     R_PROFILE(__func__);
@@ -58,6 +60,18 @@ static GLenum translate_primitive(SceGxmPrimitiveType primType) {
 void draw(GLState &renderer, GLContext &context, const FeatureState &features, SceGxmPrimitiveType type, SceGxmIndexFormat format, void *indices, size_t count, uint32_t instance_count,
     MemState &mem, const Config &config) {
     R_PROFILE(__func__);
+
+    // Vita3K-BG test switch: VITA3K_BG_DEPTH_CLAMP=1 disables OpenGL's near/far plane clipping
+    // (depth is clamped instead), closer to how the PS Vita treats geometry near the camera.
+    static const bool bg_depth_clamp = [] {
+        const char *v = std::getenv("VITA3K_BG_DEPTH_CLAMP");
+        const bool on = v && v[0] == '1';
+        if (on)
+            LOG_WARN("[Vita3K-BG] OpenGL depth clamp enabled (VITA3K_BG_DEPTH_CLAMP=1)");
+        return on;
+    }();
+    if (bg_depth_clamp)
+        glEnable(GL_DEPTH_CLAMP);
 
     GLuint program_id = context.last_draw_program;
 

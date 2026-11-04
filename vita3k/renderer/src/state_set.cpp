@@ -540,6 +540,11 @@ COMMAND_SET_STATE(visibility_index) {
         // Report every enabled test as visible instead: nothing gets culled wrongly, at the
         // cost of drawing objects that really were hidden.
         const Ptr<uint32_t> buffer = reinterpret_cast<gl::GLContext *>(render_context)->bg_visibility_buffer;
+        static bool bg_logged = false;
+        if (enable && !bg_logged) {
+            bg_logged = true;
+            LOG_WARN("[Vita3K-BG] game uses visibility tests on OpenGL (buffer {}), reporting them as visible", buffer ? "set" : "NOT set yet");
+        }
         if (enable && buffer) {
             uint32_t *result = buffer.get(mem) + index;
             if (is_increment)
