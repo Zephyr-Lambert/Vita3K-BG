@@ -11,13 +11,19 @@
 >   (render targets used as textures ignored the game's wrap mode and repeated).
 > - OpenGL: on Wayland desktops the game window showed the desktop behind it.
 >   The build now uses X11 through XWayland automatically (set `VITA3K_BG_WAYLAND=1` to opt out).
-> - Both renderers: triangular holes cut into walls and floors near the camera at certain
->   distances. Vertex depth was converted with a divide/clamp/multiply by w that broke clipping for
->   polygons with corners behind the camera.
+> - OpenGL: the game's depth bias (polygon offset) was set but never switched on.
 >
 > **Known issues**
 > - On Vulkan, stage textures are misaligned (characters and menus are fine). Use the OpenGL renderer for now.
 >   See [BULLET_GIRLS_NOTES.md](BULLET_GIRLS_NOTES.md) for the investigation so far.
+> - Both renderers: on some stages a triangular cut appears in walls or floors at certain camera
+>   distances and angles, and disappears again when the camera gets closer.
+> - OpenGL: the first mission load after updating the build can sit on a black screen for a while
+>   (with audio) while shaders are rebuilt. It only happens once per update.
+>
+> **Debug options** (environment variables)
+> - `VITA3K_BG_WIREFRAME=1` (OpenGL only): draws all geometry as black surfaces with coloured triangle
+>   edges, without textures or shadows. `=2` leaves small draws such as full-screen copies untouched.
 >
 > Everything below is the original Vita3K README.
 

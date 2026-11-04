@@ -33,6 +33,8 @@
 
 #include <spdlog/fmt/bin_to_hex.h>
 
+#include <cstdlib>
+
 namespace renderer::gl {
 static GLenum translate_primitive(SceGxmPrimitiveType primType) {
     R_PROFILE(__func__);
@@ -220,10 +222,65 @@ void draw(GLState &renderer, GLContext &context, const FeatureState &features, S
     const GLenum mode = translate_primitive(type);
     const GLenum gl_type = format == SCE_GXM_INDEX_FORMAT_U16 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT;
 
-    if (instance_count == 1) {
-        glDrawElements(mode, static_cast<GLsizei>(count), gl_type, reinterpret_cast<const void *>(index_gpu_ptr.second));
+    const auto issue_draw = [&]() {
+        if (instance_count == 1) {
+            glDrawElements(mode, static_cast<GLsizei>(count), gl_type, reinterpret_cast<const void *>(index_gpu_ptr.second));
+        } else {
+            glDrawElementsInstanced(mode, static_cast<GLsizei>(count), gl_type, reinterpret_cast<const void *>(index_gpu_ptr.second), instance_count);
+        }
+    };
+
+    // Vita3K-BG debug view: VITA3K_BG_WIREFRAME=1 draws every mesh as a solid black surface with
+    // coloured triangle edges (no textures, lighting or shadows). Each mesh gets its own edge colour.
+    // VITA3K_BG_WIREFRAME=2 does the same but leaves small draws (6 indices or fewer: full-screen
+    // copies, HUD sprites) untouched, for games that render the 3D scene off-screen first.
+    static const int bg_wireframe = [] {
+        const char *v = std::getenv("VITA3K_BG_WIREFRAME");
+        const int m = v ? std::atoi(v) : 0;
+        if (m)
+            LOG_WARN("[Vita3K-BG] wireframe view enabled (VITA3K_BG_WIREFRAME={})", m);
+        return m;
+    }();
+    const bool bg_do_wireframe = bg_wireframe && !context.record.is_maskupdate && !(bg_wireframe == 2 && count <= 6)
+        && (mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP || mode == GL_TRIANGLE_FAN);
+
+    if (bg_do_wireframe) {
+        // Colour from the index count, so the same mesh keeps its colour from frame to frame.
+        std::uint32_t h = static_cast<std::uint32_t>(count) * 2654435761u;
+        h ^= h >> 15;
+        const float r = 0.35f + 0.65f * static_cast<float>(h & 0xFF) / 255.0f;
+        const float g = 0.35f + 0.65f * static_cast<float>((h >> 8) & 0xFF) / 255.0f;
+        const float b = 0.35f + 0.65f * static_cast<float>((h >> 16) & 0xFF) / 255.0f;
+
+        // Replace whatever the shader outputs with a constant colour through the blend unit.
+        if (!both_side_fragment_program_disabled)
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFuncSeparate(GL_CONSTANT_COLOR, GL_ZERO, GL_CONSTANT_ALPHA, GL_ZERO);
+
+        // Pass 1: solid black surface, pushed slightly back so its own edges stay visible.
+        glBlendColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        glPolygonOffset(1.0f, 4.0f);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        issue_draw();
+
+        // Pass 2: triangle edges.
+        glBlendColor(r, g, b, 1.0f);
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+        glDisable(GL_POLYGON_OFFSET_LINE);
+        glLineWidth(1.5f * renderer.res_multiplier);
+        issue_draw();
+
+        // Restore the game's state.
+        sync_polygon_mode(context.record.front_polygon_mode, true);
+        sync_depth_bias(context.record.depth_bias_slope, context.record.depth_bias_unit, true);
+        sync_point_line_width(renderer, context.record.line_width, true);
+        if (!both_side_fragment_program_disabled)
+            sync_blending(context.record, mem);
     } else {
-        glDrawElementsInstanced(mode, static_cast<GLsizei>(count), gl_type, reinterpret_cast<const void *>(index_gpu_ptr.second), instance_count);
+        issue_draw();
     }
 
     // Restore context for normal draws
