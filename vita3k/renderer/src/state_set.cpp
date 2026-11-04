@@ -25,9 +25,13 @@
 #include <renderer/gl/state.h>
 #include <renderer/gl/types.h>
 
+#include <cmath>
+#include <cstdlib>
 #include <renderer/vulkan/functions.h>
 #include <renderer/vulkan/state.h>
 #include <renderer/vulkan/types.h>
+#include <set>
+#include <utility>
 
 #include <util/align.h>
 #include <util/log.h>
@@ -235,8 +239,27 @@ COMMAND_SET_STATE(viewport) {
 COMMAND_SET_STATE(depth_bias) {
     TRACY_FUNC_COMMANDS_SET_STATE(depth_bias);
     const bool is_front = helper.pop<bool>();
-    const int factor = helper.pop<int>();
-    const int unit = helper.pop<int>();
+    int factor = helper.pop<int>();
+    int unit = helper.pop<int>();
+
+    // Vita3K-BG diagnostics/test switch: log the depth bias values the game uses, and
+    // VITA3K_BG_DEPTH_BIAS_SCALE=<n> multiplies them (both renderers) for testing.
+    {
+        static const float bg_scale = [] {
+            const char *v = std::getenv("VITA3K_BG_DEPTH_BIAS_SCALE");
+            const float s = v ? std::strtof(v, nullptr) : 1.0f;
+            if (v)
+                LOG_WARN("[Vita3K-BG] depth bias scaled by {} (VITA3K_BG_DEPTH_BIAS_SCALE)", s);
+            return s;
+        }();
+        static std::set<std::pair<int, int>> bg_seen;
+        if (bg_seen.size() < 16 && bg_seen.insert({ factor, unit }).second)
+            LOG_WARN("[Vita3K-BG] game depth bias: factor {} units {} ({})", factor, unit, is_front ? "front" : "back");
+        if (bg_scale != 1.0f) {
+            factor = static_cast<int>(std::lround(factor * bg_scale));
+            unit = static_cast<int>(std::lround(unit * bg_scale));
+        }
+    }
 
     render_context->record.depth_bias_unit = unit;
     render_context->record.depth_bias_slope = factor;

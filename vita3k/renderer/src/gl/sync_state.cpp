@@ -278,6 +278,18 @@ void sync_depth_bias(const int factor, const int unit, const bool is_front) {
     // Depth Bias
     if (is_front) {
         glPolygonOffset(static_cast<GLfloat>(factor), static_cast<GLfloat>(unit));
+        // Vita3K-BG fix: polygon offset was never enabled, so OpenGL ignored the game's depth
+        // bias entirely and decals lying on other surfaces (like Bullet Girls' baked shadow
+        // strips along walls) lost the depth test in triangular regions.
+        if (factor != 0 || unit != 0) {
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glEnable(GL_POLYGON_OFFSET_LINE);
+            glEnable(GL_POLYGON_OFFSET_POINT);
+        } else {
+            glDisable(GL_POLYGON_OFFSET_FILL);
+            glDisable(GL_POLYGON_OFFSET_LINE);
+            glDisable(GL_POLYGON_OFFSET_POINT);
+        }
     }
 }
 
