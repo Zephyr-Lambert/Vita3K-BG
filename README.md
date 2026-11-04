@@ -22,8 +22,8 @@
 >   (with audio) while shaders are rebuilt. It only happens once per update.
 >
 > **Debug options** (environment variables)
-> - `VITA3K_BG_WIREFRAME=1` (OpenGL only): draws all geometry as black surfaces with coloured triangle
->   edges, without textures or shadows. `=2` leaves small draws such as full-screen copies untouched.
+> - `VITA3K_BG_WIREFRAME=1` (OpenGL only): draws all geometry as coloured triangle edges, seen through
+>   other geometry, without textures or shadows. `=2` leaves small draws such as full-screen copies untouched.
 >
 > Everything below is the original Vita3K README.
 

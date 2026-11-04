@@ -57,6 +57,20 @@ static GLenum translate_primitive(SceGxmPrimitiveType primType) {
     return GL_TRIANGLES;
 }
 
+// Vita3K-BG debug view: VITA3K_BG_WIREFRAME=1 draws every triangle mesh as coloured edges only, seen
+// through other geometry, without textures, lighting or shadows. =2 leaves small draws (6 indices or
+// fewer: full-screen copies, HUD sprites) drawn normally, for games that render the 3D scene off-screen.
+int bg_wireframe_mode() {
+    static const int m = [] {
+        const char *v = std::getenv("VITA3K_BG_WIREFRAME");
+        const int r = v ? std::atoi(v) : 0;
+        if (r)
+            LOG_WARN("[Vita3K-BG] wireframe view enabled (VITA3K_BG_WIREFRAME={})", r);
+        return r;
+    }();
+    return m;
+}
+
 void draw(GLState &renderer, GLContext &context, const FeatureState &features, SceGxmPrimitiveType type, SceGxmIndexFormat format, void *indices, size_t count, uint32_t instance_count,
     MemState &mem, const Config &config) {
     R_PROFILE(__func__);
@@ -230,17 +244,9 @@ void draw(GLState &renderer, GLContext &context, const FeatureState &features, S
         }
     };
 
-    // Vita3K-BG debug view: VITA3K_BG_WIREFRAME=1 draws every mesh as a solid black surface with
-    // coloured triangle edges (no textures, lighting or shadows). Each mesh gets its own edge colour.
-    // VITA3K_BG_WIREFRAME=2 does the same but leaves small draws (6 indices or fewer: full-screen
-    // copies, HUD sprites) untouched, for games that render the 3D scene off-screen first.
-    static const int bg_wireframe = [] {
-        const char *v = std::getenv("VITA3K_BG_WIREFRAME");
-        const int m = v ? std::atoi(v) : 0;
-        if (m)
-            LOG_WARN("[Vita3K-BG] wireframe view enabled (VITA3K_BG_WIREFRAME={})", m);
-        return m;
-    }();
+    // Vita3K-BG debug view (see bg_wireframe_mode): triangle edges only, in a constant colour per mesh,
+    // drawn through everything else (no depth test), with no textures, lighting or shadows.
+    const int bg_wireframe = bg_wireframe_mode();
     const bool bg_do_wireframe = bg_wireframe && !context.record.is_maskupdate && !(bg_wireframe == 2 && count <= 6)
         && (mode == GL_TRIANGLES || mode == GL_TRIANGLE_STRIP || mode == GL_TRIANGLE_FAN);
 
@@ -258,16 +264,12 @@ void draw(GLState &renderer, GLContext &context, const FeatureState &features, S
         glEnable(GL_BLEND);
         glBlendEquation(GL_FUNC_ADD);
         glBlendFuncSeparate(GL_CONSTANT_COLOR, GL_ZERO, GL_CONSTANT_ALPHA, GL_ZERO);
-
-        // Pass 1: solid black surface, pushed slightly back so its own edges stay visible.
-        glBlendColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-        glPolygonOffset(1.0f, 4.0f);
-        glEnable(GL_POLYGON_OFFSET_FILL);
-        issue_draw();
-
-        // Pass 2: triangle edges.
         glBlendColor(r, g, b, 1.0f);
+
+        // See-through: ignore and don't touch the depth buffer.
+        glDepthFunc(GL_ALWAYS);
+        glDepthMask(GL_FALSE);
+
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
         glDisable(GL_POLYGON_OFFSET_LINE);
         glLineWidth(1.5f * renderer.res_multiplier);
@@ -277,6 +279,8 @@ void draw(GLState &renderer, GLContext &context, const FeatureState &features, S
         sync_polygon_mode(context.record.front_polygon_mode, true);
         sync_depth_bias(context.record.depth_bias_slope, context.record.depth_bias_unit, true);
         sync_point_line_width(renderer, context.record.line_width, true);
+        sync_depth_func(context.record.front_depth_func, true);
+        sync_depth_write_enable(context.record.front_depth_write_mode, true);
         if (!both_side_fragment_program_disabled)
             sync_blending(context.record, mem);
     } else {
