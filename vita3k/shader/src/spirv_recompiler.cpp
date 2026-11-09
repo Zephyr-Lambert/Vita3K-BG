@@ -1781,10 +1781,6 @@ static spv::Function *make_vert_finalize_function(spv::Builder &b, const SpirvSh
 
             if (vo == SCE_GXM_VERTEX_PROGRAM_OUTPUT_POSITION) {
                 b.addDecoration(out_var, spv::DecorationBuiltIn, spv::BuiltInPosition);
-                // Vita3K-BG: the Vita computes identical positions for identical maths in different
-                // shaders. Without this, PC drivers may optimize each shader differently, and layers drawn
-                // on top of each other (Bullet Girls' dust on walls, flowers on the ground) z-fight.
-                b.addDecoration(out_var, spv::DecorationInvariant);
 
                 // Transform screen space coordinate to ndc when viewport is disabled.
                 const spv::Id f32 = b.makeFloatType(32);
@@ -1861,22 +1857,20 @@ static spv::Function *make_vert_finalize_function(spv::Builder &b, const SpirvSh
                     z_offset = b.createLoad(z_offset, spv::NoPrecision);
                     z_scale = b.createLoad(z_scale, spv::NoPrecision);
 
-                    // screen_z = z_offset + z_scale * (z / w)
-                    z = b.createBinOp(spv::OpFDiv, f32, z, w);
+                    // Vita3K-BG: screen_z = z_offset + z_scale * (z / w), kept in clip space (multiplied back by w)
+                    // so it stays linear across each triangle. The old version divided by w, clamped the result
+                    // to 0 and multiplied by w again. For a triangle with a corner just in front of the camera,
+                    // that clamp moved the corner's depth, so the whole triangle got wrong (too far) depth and
+                    // whatever was behind it showed through in triangular cuts (Bullet Girls' stage walls).
+                    // Values below 0 are now clamped per pixel instead, by depth clamping in the renderer.
                     z = b.createBinOp(spv::OpFMul, f32, z, z_scale);
-                    z = b.createBinOp(spv::OpFAdd, f32, z, z_offset);
-
-                    // z values below 0 get clamped
-                    z = b.createBuiltinCall(f32, utils.std_builtins, GLSLstd450FMax, { z, zero });
+                    z = b.createBinOp(spv::OpFAdd, f32, z, b.createBinOp(spv::OpFMul, f32, z_offset, w));
 
                     if (!translation_state.is_vulkan) {
-                        // convert [0,1] depth range (gxp, vulkan) to [-1,1] depth range (opengl)
+                        // convert [0,1] depth range (gxp, vulkan) to [-1,1] depth range (opengl): 2 * z - w
                         z = b.createBinOp(spv::OpFMul, f32, z, b.makeFloatConstant(2.0f));
-                        z = b.createBinOp(spv::OpFAdd, f32, z, b.makeFloatConstant(-1.0f));
+                        z = b.createBinOp(spv::OpFSub, f32, z, w);
                     }
-
-                    // multiply by w because it will be re-divided by w during screen normalization
-                    z = b.createBinOp(spv::OpFMul, f32, z, w);
 
                     b.createStore(z, z_ref);
                 }
@@ -1956,90 +1950,6 @@ static void generate_update_mask_body(spv::Builder &b, TranslationState &transla
     b.addDecoration(out, spv::DecorationLocation, 0);
 
     b.createStore(mask_v, out);
-}
-
-// Vita3K-BG: forbid the driver from fusing separate multiplies and adds (into FMA) in vertex shaders.
-// Fusing changes rounding, and drivers decide per shader, so two shaders doing the same maths could
-// produce slightly different positions and coplanar layers would z-fight. Adds a NoContraction
-// decoration to every floating-point arithmetic result in the module.
-static void add_no_contraction(SpirvCode &code) {
-    constexpr uint32_t HEADER_WORDS = 5;
-    if (code.size() <= HEADER_WORDS)
-        return;
-
-    std::vector<uint32_t> ids;
-    size_t insert_at = 0;
-    for (size_t i = HEADER_WORDS; i < code.size();) {
-        const uint32_t word_count = code[i] >> 16;
-        const uint32_t opcode = code[i] & 0xFFFF;
-        if (word_count == 0 || i + word_count > code.size())
-            return; // malformed, leave untouched
-
-        switch (opcode) {
-        case spv::OpFNegate:
-        case spv::OpFAdd:
-        case spv::OpFSub:
-        case spv::OpFMul:
-        case spv::OpFDiv:
-        case spv::OpVectorTimesScalar:
-        case spv::OpMatrixTimesScalar:
-        case spv::OpVectorTimesMatrix:
-        case spv::OpMatrixTimesVector:
-        case spv::OpMatrixTimesMatrix:
-        case spv::OpDot:
-            if (word_count >= 3)
-                ids.push_back(code[i + 2]);
-            break;
-        default:
-            break;
-        }
-
-        if (insert_at == 0) {
-            switch (opcode) {
-            case spv::OpCapability:
-            case spv::OpExtension:
-            case spv::OpExtInstImport:
-            case spv::OpMemoryModel:
-            case spv::OpEntryPoint:
-            case spv::OpExecutionMode:
-            case spv::OpExecutionModeId:
-            case spv::OpString:
-            case spv::OpSourceExtension:
-            case spv::OpSource:
-            case spv::OpSourceContinued:
-            case spv::OpName:
-            case spv::OpMemberName:
-            case spv::OpModuleProcessed:
-            case spv::OpDecorate:
-            case spv::OpMemberDecorate:
-            case spv::OpDecorationGroup:
-            case spv::OpGroupDecorate:
-            case spv::OpGroupMemberDecorate:
-            case spv::OpDecorateId:
-            case spv::OpDecorateString:
-            case spv::OpMemberDecorateString:
-            case spv::OpLine:
-            case spv::OpNoLine:
-                break;
-            default:
-                insert_at = i; // first type/constant/variable declaration
-                break;
-            }
-        }
-        i += word_count;
-    }
-
-    if (ids.empty() || insert_at == 0)
-        return;
-
-    std::vector<uint32_t> decorations;
-    decorations.reserve(ids.size() * 3);
-    for (const uint32_t id : ids) {
-        decorations.push_back((3u << 16) | spv::OpDecorate);
-        decorations.push_back(id);
-        decorations.push_back(spv::DecorationNoContraction);
-    }
-    code.insert(code.begin() + insert_at, decorations.begin(), decorations.end());
 }
 
 static SpirvCode convert_gxp_to_spirv_impl(const SceGxmProgram &program, const std::string &shader_hash, const FeatureState &features, TranslationState &translation_state, bool force_shader_debug, const std::function<bool(const std::string &ext, const std::string &dump)> &dumper) {
@@ -2183,8 +2093,6 @@ static SpirvCode convert_gxp_to_spirv_impl(const SceGxmProgram &program, const s
     }
 
     b.dump(spirv);
-    if (program.is_vertex())
-        add_no_contraction(spirv);
 
     if (LOG_SHADER_CODE || force_shader_debug) {
         std::string spirv_dump;

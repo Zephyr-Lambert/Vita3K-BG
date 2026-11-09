@@ -406,6 +406,8 @@ void set_context(GLState &state, GLContext &context, const MemState &mem, const 
         glClear(GL_COLOR_BUFFER_BIT);
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     }
+    // Vita3K-BG: depth below the near plane is clamped per pixel, not clipped (see the vertex shader finalize)
+    glEnable(GL_DEPTH_CLAMP);
     sync_depth_data(context.record);
     sync_depth_func(context.record.front_depth_func, true);
     sync_depth_func(context.record.back_depth_func, false);
