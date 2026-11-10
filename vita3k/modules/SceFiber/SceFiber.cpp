@@ -17,7 +17,7 @@
 
 #include <module/module.h>
 
-#include <cpu/functions.h>
+#include <cpu/state.h>
 #include <kernel/state.h>
 
 #include <sstream>
@@ -142,13 +142,20 @@ static void initialize_fiber(EmuEnvState &emuenv, const ThreadStatePtr &thread, 
     fiber->sizeContext = sizeContext;
     fiber->cpu = new CPUContext;
     fiber->status = FiberStatus::INIT;
-    *fiber->cpu = save_context(*thread->cpu);
+    *fiber->cpu = thread->cpu->get_context();
 
     if (addrContext && sizeContext > 0) {
         memset(addrContext.get(emuenv.mem), 0xCC, sizeContext);
         fiber->cpu->set_sp(addrContext.address() + sizeContext);
     }
     fiber->cpu->set_lr(0xDEADBEAF);
+}
+
+// Loads a fiber's registers on the thread's CPU. TPIDRURW belongs to the thread, so it keeps the
+// running thread's value.
+static void load_fiber_context(ThreadState &thread, CPUContext ctx) {
+    ctx.tpidrurw = thread.cpu->get_tpidrurw();
+    thread.cpu->set_context(ctx);
 }
 
 EXPORT(int, _sceFiberAttachContextAndRun, SceFiber *fiber, Address addrContext, SceSize sizeContext, SceUInt32 argOnRunTo, Ptr<SceUInt32> argOnRun) {
@@ -170,11 +177,11 @@ EXPORT(int, _sceFiberAttachContextAndRun, SceFiber *fiber, Address addrContext, 
         fiber->cpu->set_sp(addrContext + sizeContext);
     }
 
-    setup_fiber_to_run(emuenv, thread, fiber, read_sp(*thread->cpu), argOnRunTo);
-    set_thread_context(*state, thread->id, save_context(*thread->cpu));
+    setup_fiber_to_run(emuenv, thread, fiber, thread->cpu->get_sp(), argOnRunTo);
+    set_thread_context(*state, thread->id, thread->cpu->get_context());
     set_thread_fiber(*state, thread->id, fiber);
 
-    load_context(*thread->cpu, *fiber->cpu);
+    load_fiber_context(*thread, *fiber->cpu);
     return fiber->cpu->cpu_registers[0];
 }
 
@@ -199,13 +206,13 @@ EXPORT(int, _sceFiberAttachContextAndSwitch, SceFiber *fiber, Address addrContex
         fiber->cpu->set_sp(addrContext + sizeContext);
     }
 
-    *thread_fiber->cpu = save_context(*thread->cpu);
+    *thread_fiber->cpu = thread->cpu->get_context();
     setup_fiber_to_run(emuenv, thread, fiber, ctx.get_sp(), argOnRunTo);
     thread_fiber->status = FiberStatus::SUSPEND;
     thread_fiber->argOnRun = argOnRun;
     thread_fiber->cpu->cpu_registers[0] = SCE_FIBER_OK;
     set_thread_fiber(*state, thread->id, fiber);
-    load_context(*thread->cpu, *fiber->cpu);
+    load_fiber_context(*thread, *fiber->cpu);
 
     return fiber->cpu->cpu_registers[0];
 }
@@ -350,13 +357,13 @@ EXPORT(SceInt32, sceFiberReturnToThread, uint32_t argOnReturnTo, Ptr<uint32_t> a
         log_fiber(*state, thread, fiber, "Return to thread");
     }
 
-    *fiber->cpu = save_context(*thread->cpu);
+    *fiber->cpu = thread->cpu->get_context();
     fiber->cpu->cpu_registers[0] = SCE_FIBER_OK;
     fiber->status = FiberStatus::SUSPEND;
     fiber->argOnRun = argOnRun;
     set_thread_fiber(*state, thread->id, nullptr);
 
-    load_context(*thread->cpu, thread_context);
+    load_fiber_context(*thread, thread_context);
     Address argOnReturn = thread_context.cpu_registers[2];
     if (argOnReturn) {
         *(Ptr<uint32_t>(argOnReturn).get(emuenv.mem)) = argOnReturnTo;
@@ -386,11 +393,11 @@ EXPORT(SceUInt32, sceFiberRun, SceFiber *fiber, SceUInt32 argOnRunTo, Ptr<SceUIn
         log_fiber(*state, thread, fiber, "Run");
     }
 
-    setup_fiber_to_run(emuenv, thread, fiber, read_sp(*thread->cpu), argOnRunTo);
-    set_thread_context(*state, thread->id, save_context(*thread->cpu));
+    setup_fiber_to_run(emuenv, thread, fiber, thread->cpu->get_sp(), argOnRunTo);
+    set_thread_context(*state, thread->id, thread->cpu->get_context());
     set_thread_fiber(*state, thread->id, fiber);
 
-    load_context(*thread->cpu, *fiber->cpu);
+    load_fiber_context(*thread, *fiber->cpu);
     return fiber->cpu->cpu_registers[0];
 }
 
@@ -427,13 +434,13 @@ EXPORT(SceUInt32, sceFiberSwitch, SceFiber *fiber, SceUInt32 argOnRunTo, Ptr<Sce
         log_fiber(*state, thread, fiber, "Switch");
     }
 
-    *thread_fiber->cpu = save_context(*thread->cpu);
+    *thread_fiber->cpu = thread->cpu->get_context();
     thread_fiber->status = FiberStatus::SUSPEND;
     thread_fiber->argOnRun = argOnRun;
     thread_fiber->cpu->cpu_registers[0] = SCE_FIBER_OK;
     set_thread_fiber(*state, thread->id, fiber);
     setup_fiber_to_run(emuenv, thread, fiber, ctx.get_sp(), argOnRunTo);
-    load_context(*thread->cpu, *fiber->cpu);
+    load_fiber_context(*thread, *fiber->cpu);
 
     return fiber->cpu->cpu_registers[0];
 }

@@ -68,7 +68,7 @@ constexpr uint64_t lib_export_key(uint32_t library_nid, uint32_t nid) {
 }
 
 using NotFoundVars = std::map<Address, uint32_t>;
-using CallImportFunc = std::function<void(CPUState &cpu, uint32_t nid, SceUID thread_id)>;
+using CallImportFunc = std::function<CallResult(CPUState &cpu, uint32_t nid, SceUID thread_id)>;
 
 struct CodecEngineBlock {
     uint32_t size;
@@ -143,9 +143,8 @@ struct KernelState {
     CorenumAllocator corenum_allocator;
     CallImportFunc call_import;
 
-    // Shared NOP+WFI sentinel used by the Dynarmic as the halt return address
+    // Thumb NOP and WFI that guest functions called by the kernel return to
     Block halt_instruction;
-    Address halt_instruction_pc;
 
     ObjectStore obj_store;
 
@@ -172,28 +171,21 @@ struct KernelState {
     bool init(MemState &mem, const CallImportFunc &call_import, bool cpu_opt);
     void deinit(MemState &mem);
     void load_process_param(MemState &mem, Ptr<uint32_t> ptr);
-    ThreadStatePtr create_thread(MemState &mem, const char *name, Ptr<const void> entry_point = Ptr<const void>(0));
-    // Creates a dormant thread with these creation arguments, attr without THREAD_ATTR_USER, or returns null
-    ThreadStatePtr create_thread(MemState &mem, const char *name, Ptr<const void> entry_point, int init_priority, SceInt32 affinity_mask, int stack_size, SceUInt32 attr, const SceKernelThreadOptParam *option);
+    // Creates a dormant thread with these creation arguments, attr without
+    // SCE_KERNEL_THREAD_ATTR_USER, or returns null
+    ThreadStatePtr create_thread(MemState &mem, const char *name, Ptr<const void> entry_point, int init_priority, SceInt32 affinity_mask, int stack_size, SceUInt32 attr);
 
     ThreadStatePtr get_thread(SceUID thread_id);
 
-    // Creates a callback owned by thread and returns its UID.
-    SceUID create_callback(const ThreadStatePtr &thread, const char *name, Ptr<SceKernelCallbackFunction> func, Ptr<void> common);
-    // Deletes the callback with this UID for the thread deleter, so it never runs again. Returns false
-    // if there is none.
-    bool delete_callback(SceUID id, SceUID deleter);
     Ptr<Ptr<void>> get_thread_tls_addr(MemState &mem, SceUID thread_id, int key);
 
-    bool is_threads_paused() {
-        const std::lock_guard<std::mutex> lock(mutex);
-        return threads_paused;
-    }
-    void pause_threads();
-    void resume_threads();
-    // Stops every thread for the debugger, and the threads created until the resume start stopped
-    void suspend_threads();
-    void resume_suspended_threads();
+    // Whether the emulator pause holds every thread. Threads read it without mutex, under their own lock.
+    bool is_threads_paused() const { return threads_paused; }
+    // Pauses every thread, and the threads created until the pause ends, or lets them run again
+    void set_threads_paused(bool paused);
+    // Stops every thread for the debugger, and the threads created until it lets them go, or lets
+    // them run again
+    void set_threads_suspended(bool suspended);
 
     // Kill all guest threads and block until they have exited. Must only be called from a host thread.
     void process_exit();
@@ -208,6 +200,8 @@ struct KernelState {
 
 private:
     std::atomic<SceUID> next_uid{ 1 };
-    bool threads_paused = false;
+    std::atomic<bool> threads_paused{ false };
     bool threads_suspended = false;
+    // The process is exiting, so a thread still being created ends as well
+    bool process_exiting = false;
 };

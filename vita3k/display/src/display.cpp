@@ -17,6 +17,8 @@
 
 #include <display/functions.h>
 
+#include <cheat/functions.h>
+#include <ctrl/functions.h>
 #include <dialog/state.h>
 #include <display/state.h>
 #include <emuenv/state.h>
@@ -38,13 +40,20 @@ static constexpr int max_expected_swapchain_size = 6;
 static void vblank_sync_thread(EmuEnvState &emuenv) {
     DisplayState &display = emuenv.display;
 
+    const cheat::JitInvalidate invalidate_jit = [&emuenv](uint32_t address, size_t size) {
+        emuenv.kernel.invalidate_jit_cache(address, size);
+    };
+
     while (!display.abort.load()) {
         {
             const std::lock_guard<std::mutex> guard(display.mutex);
 
+            bool has_frame = false;
             {
                 const std::lock_guard<std::mutex> guard_info(display.display_info_mutex);
                 ++display.vblank_count;
+
+                has_frame = static_cast<bool>(display.sce_frame.base);
 
                 // in this case, even though no new game frames are being rendered, we still need to update the screen
                 if (emuenv.kernel.is_threads_paused() || (emuenv.common_dialog.status == SCE_COMMON_DIALOG_STATUS_RUNNING))
@@ -59,9 +68,20 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
             touch_vsync_update(emuenv);
             refresh_motion(emuenv.motion, emuenv.ctrl);
 
-            // Notify Vblank callback in each VBLANK start
-            for (auto &[_, cb] : display.vblank_callbacks)
-                cb->event_notify(cb->get_notifier_id());
+            if (has_frame)
+                emuenv.cheat.count_frame();
+
+            // Cheat codes are re-applied on every vblank, the same way the Vita cheat plugins do.
+            // The pad is read here rather than taken from the game, which may stop reading it while a button is held.
+            cheat::set_buttons(emuenv.cheat, ctrl_peek_buttons(emuenv, 1));
+            cheat::apply(emuenv.cheat, emuenv.mem, invalidate_jit);
+
+            // Notify Vblank callback in each VBLANK start, skipping the deleted ones
+            for (const SceUID uid : display.vblank_callbacks) {
+                const CallbackPtr cb = emuenv.kernel.objects.find<Callback>(uid);
+                if (const ThreadStatePtr owner = cb ? emuenv.kernel.get_thread(cb->thread_id) : nullptr)
+                    owner->notify_callback(*cb, 0);
+            }
 
             display.vblank_waiters.wake_if([&](auto &waiter) {
                 return waiter.entry.target_vcount <= display.vblank_count;

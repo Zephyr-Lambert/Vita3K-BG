@@ -1056,6 +1056,8 @@ void VKState::cleanup() {
     device.waitIdle();
 
     request_queue.abort();
+    if (gpu_request_wait_thread.joinable())
+        gpu_request_wait_thread.join();
 
     context = nullptr;
 
@@ -1139,7 +1141,9 @@ void VKState::cleanup() {
     gxp_ptr_map.clear();
     shaders_cache_hashs.clear();
     request_queue.reset();
+    frame_timestamp = 1;
     current_frame_idx = 1;
+    last_frame_waited = 0;
     last_scene_id = 0;
     shaders_count_compiled = 0;
     programs_count_pre_compiled = 0;
@@ -1321,7 +1325,7 @@ uint32_t VKState::get_features_mask() {
 }
 
 int VKState::get_supported_filters() {
-    int filters = static_cast<int>(Filter::NEAREST) | static_cast<int>(Filter::BILINEAR) | static_cast<int>(Filter::BICUBIC) | static_cast<int>(Filter::FXAA);
+    int filters = static_cast<int>(Filter::NEAREST) | static_cast<int>(Filter::BILINEAR) | static_cast<int>(Filter::BICUBIC) | static_cast<int>(Filter::FXAA) | static_cast<int>(Filter::SMAA);
     if (support_fsr)
         filters |= static_cast<int>(Filter::FSR);
     return filters;
@@ -1828,7 +1832,6 @@ void VKState::precompile_shader(const ShadersHash &hash) {
 
 void VKState::preclose_action() {
     // Stop the GPU request wait thread before destruction begins.
-    // VKState (owns the queue) is destroyed before VKContext (owns the thread).
     request_queue.abort();
 
     // make sure we are in a game

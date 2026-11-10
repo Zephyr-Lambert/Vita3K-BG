@@ -47,6 +47,20 @@
 #define SCE_KERNEL_STACK_SIZE_USER_DEFAULT KiB(4)
 #define SCE_KERNEL_THREAD_STACK_SIZE_MAX MiB(32)
 
+// The thread attributes that can be set when creating a thread. SCE_KERNEL_THREAD_ATTR_USER is always set, and the others are optional.
+#define SCE_KERNEL_THREAD_ATTR_USER 0x80000000U
+#define SCE_KERNEL_THREAD_ATTR_NOUSE_VFP 0x01000000U
+#define SCE_KERNEL_THREAD_ATTR_VM 0x04000000U
+#define SCE_KERNEL_THREAD_ATTR_UNKNOWN_2000 0x00002000U
+
+// The FPSCR a thread starts with: round to nearest, flush-to-zero and default NaN
+#define SCE_KERNEL_THREAD_INITIAL_FPSCR 0x03000000U
+
+// The words of the value the kernel puts in the d registers it doesn't keep for a thread
+#define SCE_KERNEL_VFP_REGISTER_FILL_LOW 0x7F80DEADU
+#define SCE_KERNEL_VFP_REGISTER_FILL_HIGH 0x7FF8DEADU
+
+// The bits that order the threads waiting on a sync object, separately for each object type
 #define SCE_KERNEL_ATTR_TH_FIFO 0x00000000U
 #define SCE_KERNEL_ATTR_TH_PRIO 0x00002000U
 
@@ -134,6 +148,10 @@
 #define SCE_KERNEL_WAITTYPE_LW_MUTEX 0x00100000U
 #define SCE_KERNEL_WAITTYPE_LW_COND_SIGNAL 0x00200000U
 #define SCE_KERNEL_WAITTYPE_LW_COND_LW_MUTEX 0x00400000U
+#define SCE_KERNEL_WAITTYPE_CB_BIT 0x80000000U
+
+// What a thread waiting for a thread signal reports as its wait UID
+#define SCE_KERNEL_SIGNAL_WAIT_ID 0x00010221
 
 #define KERNELOBJECT_MAX_NAME_LENGTH 31
 
@@ -324,6 +342,7 @@ enum SceKernelErrorCode : uint32_t {
     SCE_KERNEL_ERROR_ALREADY_DEBUG_SUSPENDED = 0x8002802F,
     SCE_KERNEL_ERROR_NOT_DEBUG_SUSPENDED = 0x80028030,
     SCE_KERNEL_ERROR_CAN_NOT_USE_VFP = 0x80028031,
+    SCE_KERNEL_ERROR_VM_NOT_SUSPENDED = 0x80028033,
     SCE_KERNEL_ERROR_THREAD_EVENT_ERROR = 0x80028060,
     SCE_KERNEL_ERROR_UNKNOWN_THREAD_EVENT_ID = 0x80028061,
     SCE_KERNEL_ERROR_KERNEL_TLS_ERROR = 0x80028080,
@@ -629,6 +648,9 @@ enum SceSysmoduleInternalModuleId : uint32_t {
     SCE_SYSMODULE_INTERNAL_LOCATION_INTERNAL = 0x80000028, //!< sceLocation module
     SCE_SYSMODULE_INTERNAL_LOCATION_FACTORY = 0x80000029 //!< Location Factory module
 };
+
+// The size of the kernel's part of a thread's TLS, below the part the guest sees
+#define SCE_KERNEL_TLS_SIZE 0x800
 
 // Indexes in thread local storage (TLS) for system data. It is used mostly by libkernel.
 enum TlsItems {

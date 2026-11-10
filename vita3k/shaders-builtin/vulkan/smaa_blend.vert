@@ -15,24 +15,28 @@
 // with this program; if not, write to the Free Software Foundation, Inc.,
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
-#pragma once
+#version 450
+#extension GL_GOOGLE_include_directive : require
 
-#include <mem/ptr.h>
+layout(location = 0) in vec3 position_vertex;
+layout(location = 1) in vec2 uv_vertex;
 
-#include <cstdlib>
+layout(push_constant) uniform constants {
+    vec4 rt_metrics; // 1/w, 1/h, w, h
+} pc;
 
-struct CPUState;
+#define SMAA_RT_METRICS pc.rt_metrics
+#define SMAA_GLSL_4 1
+#define SMAA_PRESET_HIGH 1
+#define SMAA_INCLUDE_PS 0
+#include "../SMAA.hlsl"
 
-void write_return_value(CPUState &cpu, int32_t ret);
-void write_return_value(CPUState &cpu, int64_t ret);
-void write_return_value(CPUState &cpu, uint32_t ret);
-void write_return_value(CPUState &cpu, uint64_t ret);
-void write_return_value(CPUState &cpu, std::div_t ret);
-void write_return_value(CPUState &cpu, std::lldiv_t ret);
-void write_return_value(CPUState &cpu, bool ret);
-void write_return_value(CPUState &cpu, float ret);
+layout(location = 0) out vec2 uv_frag;
+layout(location = 1) out vec2 pixcoord_frag;
+layout(location = 2) out vec4 offset_frag[3];
 
-template <typename Pointee>
-void write_return_value(CPUState &cpu, const Ptr<Pointee> &ret) {
-    write_return_value(cpu, ret.address());
+void main() {
+    gl_Position = vec4(position_vertex, 1.0);
+    uv_frag = uv_vertex;
+    SMAABlendingWeightCalculationVS(uv_vertex, pixcoord_frag, offset_frag);
 }
