@@ -33,6 +33,10 @@
 
 #include <spdlog/fmt/bin_to_hex.h>
 
+#include <cstdlib>
+#include <set>
+#include <string>
+
 namespace renderer::gl {
 static GLenum translate_primitive(SceGxmPrimitiveType primType) {
     R_PROFILE(__func__);
@@ -62,6 +66,25 @@ void draw(GLState &renderer, GLContext &context, const FeatureState &features, S
     GLuint program_id = context.last_draw_program;
 
     const SceGxmFragmentProgram &gxm_fragment_program = *context.record.fragment_program.get(mem);
+
+    // Vita3K-BG debug: VITA3K_BG_LOG_DEPTH=1 logs the GXM depth/cull state once per fragment program and state
+    // combination. GL and Vulkan only apply the front-face depth settings; this shows whether a game sets
+    // different ones for back faces.
+    static const bool bg_log_depth = [] {
+        const char *v = std::getenv("VITA3K_BG_LOG_DEPTH");
+        return v && v[0] == '1';
+    }();
+    if (bg_log_depth) {
+        static std::set<std::string> seen;
+        const auto &rec = context.record;
+        const std::string line = fmt::format("frag {} cull {} two_sided {} write F/B {}/{} func F/B {}/{} indices {}",
+            hex_string(gxm_fragment_program.renderer_data->hash).substr(0, 16), static_cast<int>(rec.cull_mode), static_cast<int>(rec.two_sided),
+            rec.front_depth_write_mode == SCE_GXM_DEPTH_WRITE_ENABLED ? "on" : "off", rec.back_depth_write_mode == SCE_GXM_DEPTH_WRITE_ENABLED ? "on" : "off",
+            static_cast<int>(rec.front_depth_func), static_cast<int>(rec.back_depth_func), count);
+        const std::string key = line.substr(0, line.find(" indices"));
+        if (seen.insert(key).second)
+            LOG_WARN("[Vita3K-BG depth] {}", line);
+    }
     const SceGxmProgram &fragment_program_gxp = *gxm_fragment_program.program.get(mem);
 
     if (!renderer.features.use_mask_bit && gxm_fragment_program.is_maskupdate) {
