@@ -151,39 +151,67 @@ spv::Id shader::usse::USSETranslatorVisitor::do_fetch_texture(const spv::Id tex,
     }
 
     if (m_spirv_params.smooth_upscaled_samples && dim == 2 && op == spv::OpImageSampleImplicitLod && params.size() == 2) {
-        // Vita3K-BG: 2x2 bilinear samples spread over the area of one native texel (scale x scale pixels).
-        // At 4x each sample averages a 2x2 block, so together they cover the 4x4 block exactly.
-        // At 1x the spread is 0 and this gives the same result as a single sample.
+        // Vita3K-BG: reproduce what this sample returns at native resolution. At native, a bilinear sample
+        // blends the 4 nearest native texels. Upscaled, one native texel is a scale x scale block of pixels,
+        // so: find the 4 native texels around the sample, take the average of each block, and blend those
+        // 4 averages with the native bilinear weights. Each block average is 2x2 bilinear samples, which is
+        // exact at 2x and 4x. At 1x this is the same as a single bilinear sample.
         spv::Id uv = coord_id;
         if (m_b.getNumComponents(uv) > 2)
             uv = m_b.createOp(spv::OpVectorShuffle, type_f32_v[2], { { true, uv }, { true, uv }, { false, 0 }, { false, 1 } });
 
+        const spv::Id v2 = type_f32_v[2];
+        const spv::Id v4 = type_f32_v[4];
+        const auto v2_of = [&](spv::Id x) { return m_b.createCompositeConstruct(v2, { x, x }); };
+
         m_b.addCapability(spv::CapabilityImageQuery);
         const spv::Id image = m_b.createUnaryOp(spv::OpImage, m_b.getImageType(tex), tex);
         const spv::Id size_i = m_b.createBinOp(spv::OpImageQuerySizeLod, m_b.makeVectorType(m_b.makeIntType(32), 2), image, m_b.makeIntConstant(0));
-        const spv::Id size_f = m_b.createUnaryOp(spv::OpConvertSToF, type_f32_v[2], size_i);
+        const spv::Id size_f = m_b.createUnaryOp(spv::OpConvertSToF, v2, size_i);
 
         spv::Id scale = utils::create_access_chain(m_b, spv::StorageClassUniform, m_spirv_params.render_info_id, { m_b.makeIntConstant(FRAG_UNIFORM_res_multiplier) });
         scale = m_b.createLoad(scale, spv::NoPrecision);
+        scale = m_b.createBuiltinCall(type_f32, std_builtins, GLSLstd450FMax, { scale, m_b.makeFloatConstant(1.0f) });
         const spv::Id upscaled = m_b.createBinOp(spv::OpFOrdGreaterThan, m_b.makeBoolType(), scale, m_b.makeFloatConstant(1.0f));
         const spv::Id spread = m_b.createTriOp(spv::OpSelect, type_f32, upscaled,
             m_b.createBinOp(spv::OpFMul, type_f32, scale, m_b.makeFloatConstant(0.25f)), m_b.makeFloatConstant(0.0f));
-        // offset in UV = spread / size
-        const spv::Id delta = m_b.createBinOp(spv::OpFDiv, type_f32_v[2], m_b.createCompositeConstruct(type_f32_v[2], { spread, spread }), size_f);
+
+        // native texture size, and the position of the sample in native texels
+        const spv::Id native_size = m_b.createBinOp(spv::OpFDiv, v2, size_f, v2_of(scale));
+        const spv::Id half = v2_of(m_b.makeFloatConstant(0.5f));
+        const spv::Id p = m_b.createBinOp(spv::OpFSub, v2, m_b.createBinOp(spv::OpFMul, v2, uv, native_size), half);
+        const spv::Id base = m_b.createBuiltinCall(v2, std_builtins, GLSLstd450Floor, { p });
+        const spv::Id frac = m_b.createBinOp(spv::OpFSub, v2, p, base);
+
+        // offsets of the 2x2 samples inside a block, in UV
+        const spv::Id delta = m_b.createBinOp(spv::OpFDiv, v2, v2_of(spread), size_f);
         const spv::Id dx = m_b.createCompositeExtract(delta, type_f32, 0);
         const spv::Id dy = m_b.createCompositeExtract(delta, type_f32, 1);
         const spv::Id ndx = m_b.createUnaryOp(spv::OpFNegate, type_f32, dx);
         const spv::Id ndy = m_b.createUnaryOp(spv::OpFNegate, type_f32, dy);
-
-        spv::Id sum = spv::NoResult;
         const spv::Id offsets[4][2] = { { ndx, ndy }, { dx, ndy }, { ndx, dy }, { dx, dy } };
-        for (const auto &off : offsets) {
-            const spv::Id pos = m_b.createBinOp(spv::OpFAdd, type_f32_v[2], uv, m_b.createCompositeConstruct(type_f32_v[2], { off[0], off[1] }));
-            const spv::Id s = m_b.createOp(spv::OpImageSampleImplicitLod, type_f32_v[4], { tex, pos });
-            sum = (sum == spv::NoResult) ? s : m_b.createBinOp(spv::OpFAdd, type_f32_v[4], sum, s);
-        }
         const spv::Id quarter = m_b.makeFloatConstant(0.25f);
-        image_sample = m_b.createBinOp(spv::OpVectorTimesScalar, type_f32_v[4], sum, quarter);
+
+        const auto block_average = [&](float ox, float oy) {
+            // centre of native texel (base + o) in UV
+            const spv::Id texel = m_b.createBinOp(spv::OpFAdd, v2, base, m_b.makeCompositeConstant(v2, { m_b.makeFloatConstant(ox + 0.5f), m_b.makeFloatConstant(oy + 0.5f) }));
+            const spv::Id centre = m_b.createBinOp(spv::OpFDiv, v2, texel, native_size);
+            spv::Id sum = spv::NoResult;
+            for (const auto &off : offsets) {
+                const spv::Id pos = m_b.createBinOp(spv::OpFAdd, v2, centre, m_b.createCompositeConstruct(v2, { off[0], off[1] }));
+                const spv::Id smp = m_b.createOp(spv::OpImageSampleImplicitLod, v4, { tex, pos });
+                sum = (sum == spv::NoResult) ? smp : m_b.createBinOp(spv::OpFAdd, v4, sum, smp);
+            }
+            return m_b.createBinOp(spv::OpVectorTimesScalar, v4, sum, quarter);
+        };
+
+        const spv::Id fx = m_b.createCompositeExtract(frac, type_f32, 0);
+        const spv::Id fy = m_b.createCompositeExtract(frac, type_f32, 1);
+        const spv::Id fx4 = m_b.createCompositeConstruct(v4, { fx, fx, fx, fx });
+        const spv::Id fy4 = m_b.createCompositeConstruct(v4, { fy, fy, fy, fy });
+        const spv::Id top = m_b.createBuiltinCall(v4, std_builtins, GLSLstd450FMix, { block_average(0, 0), block_average(1, 0), fx4 });
+        const spv::Id bottom = m_b.createBuiltinCall(v4, std_builtins, GLSLstd450FMix, { block_average(0, 1), block_average(1, 1), fx4 });
+        image_sample = m_b.createBuiltinCall(v4, std_builtins, GLSLstd450FMix, { top, bottom, fy4 });
     } else {
         image_sample = m_b.createOp(op, type_f32_v[4], params);
     }
