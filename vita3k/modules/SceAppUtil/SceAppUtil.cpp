@@ -325,6 +325,11 @@ static bool sdslot_ensure_file(EmuEnvState &emuenv, const char *export_name) {
         sdslot_load_existing(emuenv, buf, export_name);
     std::memcpy(buf.data(), SDSLOT_MAGIC, sizeof(SDSLOT_MAGIC));
 
+    // Vita3K-BG: savedata0:sce_sys/ doesn't exist for saves made by earlier Vita3K versions (or games that
+    // never used it), and the file below can't be created without it; every save then failed with
+    // "not enough free space".
+    create_dir(emuenv.io, construct_savedata0_path("sce_sys", "").c_str(), 0777, emuenv.vita_fs_path, export_name, true);
+
     const auto tmp_path = construct_sdslot_temp_path();
     if (const auto old_tmp = open_file(emuenv.io, tmp_path.c_str(), SCE_O_RDONLY, emuenv.vita_fs_path, export_name); old_tmp >= 0) {
         close_file(emuenv.io, old_tmp, export_name);
