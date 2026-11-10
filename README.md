@@ -15,10 +15,12 @@
 > - Both renderers: triangular cuts in walls and floors at certain camera distances
 >   (a triangle corner just in front of the camera had its depth clamped per vertex, which pushed the
 >   whole triangle behind the surface beneath it; depth is now clamped per pixel instead).
+> - Vulkan (rare, setup-dependent): stage textures misaligned or shifting every frame. Seen on an
+>   NVIDIA RTX 2060 on Linux; other users' Vulkan setups were not affected. The stage shaders read
+>   registers that are never loaded; most drivers return 0 there, this one returned leftover data.
+>   Registers now start at 0 and out-of-range reads return 0. See [BULLET_GIRLS_NOTES.md](BULLET_GIRLS_NOTES.md).
 >
 > **Known issues**
-> - On Vulkan, stage textures are misaligned (characters and menus are fine). Use the OpenGL renderer for now.
->   See [BULLET_GIRLS_NOTES.md](BULLET_GIRLS_NOTES.md) for the investigation so far.
 > - The first mission load after updating the build can sit on a black screen for a while
 >   (with audio) while shaders are rebuilt. It only happens once per update.
 >

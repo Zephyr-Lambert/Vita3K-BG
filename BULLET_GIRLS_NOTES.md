@@ -46,7 +46,11 @@ cache version was bumped to 19 so old cached shaders are rebuilt.
 Ruled out along the way: z-fighting/invariance, mipmaps/LOD bias, resolution
 scale, anisotropic filtering, depth bias.
 
-## Open: stage textures misaligned on Vulkan (NVIDIA RTX 2060, Linux)
+## Fixed: stage textures misaligned on Vulkan (NVIDIA RTX 2060, Linux; rare)
+
+Rare and setup-dependent: other users' Vulkan screenshots didn't show it.
+Fixed by zeroing register banks and guarding indexed reads (see "Finding
+from RenderDoc captures" below); confirmed in game.
 
 ### Symptom
 - Stage geometry only; characters, HUD and menus are fine.
@@ -106,7 +110,7 @@ secondary-attribute read:
   return 0. On NVIDIA Vulkan, private arrays aren't zeroed and out-of-range
   reads return whatever is there, hence offsets that change per frame.
 
-Fix (testing): register banks are zero-initialised, and indexed reads clamp
+Fix (confirmed in game): register banks are zero-initialised, and indexed reads clamp
 the index into range and return 0 when it was out of range. Shader cache
 version bumped to 20. Open question: whether `idx * 2` is the right scale for
 indexed SA access (with `idx + 14` the reads would land exactly on uniform
