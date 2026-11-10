@@ -17,6 +17,7 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #include <shader/spirv_recompiler.h>
+#include <shader/uniform_block.h>
 #include <shader/usse_decoder_helpers.h>
 #include <shader/usse_disasm.h>
 #include <shader/usse_translator.h>
@@ -149,7 +150,43 @@ spv::Id shader::usse::USSETranslatorVisitor::do_fetch_texture(const spv::Id tex,
         }
     }
 
-    image_sample = m_b.createOp(op, type_f32_v[4], params);
+    if (m_spirv_params.smooth_upscaled_samples && dim == 2 && op == spv::OpImageSampleImplicitLod && params.size() == 2) {
+        // Vita3K-BG: 2x2 bilinear samples spread over the area of one native texel (scale x scale pixels).
+        // At 4x each sample averages a 2x2 block, so together they cover the 4x4 block exactly.
+        // At 1x the spread is 0 and this gives the same result as a single sample.
+        spv::Id uv = coord_id;
+        if (m_b.getNumComponents(uv) > 2)
+            uv = m_b.createOp(spv::OpVectorShuffle, type_f32_v[2], { { true, uv }, { true, uv }, { false, 0 }, { false, 1 } });
+
+        m_b.addCapability(spv::CapabilityImageQuery);
+        const spv::Id image = m_b.createUnaryOp(spv::OpImage, m_b.getImageType(tex), tex);
+        const spv::Id size_i = m_b.createBinOp(spv::OpImageQuerySizeLod, m_b.makeVectorType(m_b.makeIntType(32), 2), image, m_b.makeIntConstant(0));
+        const spv::Id size_f = m_b.createUnaryOp(spv::OpConvertSToF, type_f32_v[2], size_i);
+
+        spv::Id scale = utils::create_access_chain(m_b, spv::StorageClassUniform, m_spirv_params.render_info_id, { m_b.makeIntConstant(FRAG_UNIFORM_res_multiplier) });
+        scale = m_b.createLoad(scale, spv::NoPrecision);
+        const spv::Id upscaled = m_b.createBinOp(spv::OpFOrdGreaterThan, m_b.makeBoolType(), scale, m_b.makeFloatConstant(1.0f));
+        const spv::Id spread = m_b.createTriOp(spv::OpSelect, type_f32, upscaled,
+            m_b.createBinOp(spv::OpFMul, type_f32, scale, m_b.makeFloatConstant(0.25f)), m_b.makeFloatConstant(0.0f));
+        // offset in UV = spread / size
+        const spv::Id delta = m_b.createBinOp(spv::OpFDiv, type_f32_v[2], m_b.createCompositeConstruct(type_f32_v[2], { spread, spread }), size_f);
+        const spv::Id dx = m_b.createCompositeExtract(delta, type_f32, 0);
+        const spv::Id dy = m_b.createCompositeExtract(delta, type_f32, 1);
+        const spv::Id ndx = m_b.createUnaryOp(spv::OpFNegate, type_f32, dx);
+        const spv::Id ndy = m_b.createUnaryOp(spv::OpFNegate, type_f32, dy);
+
+        spv::Id sum = spv::NoResult;
+        const spv::Id offsets[4][2] = { { ndx, ndy }, { dx, ndy }, { ndx, dy }, { dx, dy } };
+        for (const auto &off : offsets) {
+            const spv::Id pos = m_b.createBinOp(spv::OpFAdd, type_f32_v[2], uv, m_b.createCompositeConstruct(type_f32_v[2], { off[0], off[1] }));
+            const spv::Id s = m_b.createOp(spv::OpImageSampleImplicitLod, type_f32_v[4], { tex, pos });
+            sum = (sum == spv::NoResult) ? s : m_b.createBinOp(spv::OpFAdd, type_f32_v[4], sum, s);
+        }
+        const spv::Id quarter = m_b.makeFloatConstant(0.25f);
+        image_sample = m_b.createBinOp(spv::OpVectorTimesScalar, type_f32_v[4], sum, quarter);
+    } else {
+        image_sample = m_b.createOp(op, type_f32_v[4], params);
+    }
 
     if (get_data_type_size(dest_type) < 4 && dest_type != DataType::UINT16 && dest_type != DataType::INT16)
         m_b.setPrecision(image_sample, spv::DecorationRelaxedPrecision);

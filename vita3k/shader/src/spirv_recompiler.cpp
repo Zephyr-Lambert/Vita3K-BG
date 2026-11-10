@@ -40,6 +40,7 @@
 #include <functional>
 #include <list>
 #include <map>
+#include <set>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -2048,6 +2049,19 @@ static SpirvCode convert_gxp_to_spirv_impl(const SceGxmProgram &program, const s
 
     // Generate parameters
     SpirvShaderParameters parameters = create_parameters(b, program, utils, features, translation_state, program_type, texture_queries);
+
+    // Vita3K-BG: post-processing passes whose texture taps sit a fixed distance apart in UV space. When the
+    // render is upscaled, those taps skip over most pixels and the effect bands instead of looking smooth,
+    // so average each tap over the area one native texel would cover.
+    static const std::set<std::string> smooth_upscaled_shaders = {
+        // Bullet Girls (PCSG00361) bloom: downsample, then four blur passes
+        "1169119b099db3407c9ba0a8a03b71237410fb721668467326c21a7d941e54db",
+        "539ea76169e5dfdd02d73b4d72191d3df36e1b641d04dc9c1c690bc36004fbb1",
+        "43762c74efb26ec49c835a832ddbfc9f635bfc3be439cb761d49be778e3905c6",
+        "dfc115f22011386225881869c5a63873225952b4584da2c64f7991c5c593fb5f",
+    };
+    parameters.smooth_upscaled_samples = program.is_fragment() && parameters.render_info_id != spv::NoResult
+        && smooth_upscaled_shaders.contains(shader_hash);
 
     if (!translation_state.is_maskupdate) {
         if (program.is_fragment()) {

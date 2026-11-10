@@ -89,6 +89,10 @@ struct SpirvShaderParameters {
     int viewport_ratio_id;
     int viewport_offset_id;
 
+    // Vita3K-BG: when upscaling, average each texture sample over the area one native texel covers
+    // (used for Bullet Girls' bloom passes, see spirv_recompiler.cpp)
+    bool smooth_upscaled_samples = false;
+
     // when using a thread, texture or literal buffer, if not -1, this fields contain the sa register
     // with the matching address, this assumes of course that this address is not copied somewhere
     // else and that this register is not overwritten
