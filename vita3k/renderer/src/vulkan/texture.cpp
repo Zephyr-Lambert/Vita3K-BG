@@ -116,6 +116,11 @@ void sync_texture(VKContext &context, MemState &mem, std::size_t index, SceGxmTe
         // try to retrieve it from the color surface cache
         lookup_result = context.state.surface_cache.retrieve_color_surface_as_texture(texture, format_target_of_texture, &texture_viewport);
     }
+    context.render_target_texture_mask[index] = lookup_result.has_value() && context.state.surface_cache.last_lookup_copied_render_target;
+    if (context.render_target_texture_mask[index]) {
+        context.render_target_textures[index] = texture;
+        context.render_target_texture_copy_timestamp[index] = context.scene_timestamp;
+    }
 
     bool is_depth_surface = false;
     if (!lookup_result.has_value() && is_depth_stencil_compatible_format(base_format, is_depth_surface)) {

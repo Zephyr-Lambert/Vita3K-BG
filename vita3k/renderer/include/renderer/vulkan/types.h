@@ -17,6 +17,9 @@
 
 #pragma once
 
+#include <array>
+#include <bitset>
+
 #include <renderer/texture_cache.h>
 #include <renderer/types.h>
 #include <shader/uniform_block.h>
@@ -337,6 +340,14 @@ struct VKContext : public renderer::Context {
     uint16_t last_macroblock_y = ~0;
     // special case where we can't determine the current macroblock
     bool ignore_macroblock = false;
+    // Vita3K-BG: whether a draw was recorded since the last start_recording
+    bool drawn_in_recording = false;
+    // Vita3K-BG: textures that are the current render target, copied into the prerender command so the
+    // draw sees what was rendered before it. When the scene is split into several recordings (macroblock
+    // sync), these must be copied again for each recording, as the game doesn't set them again.
+    std::array<SceGxmTexture, SCE_GXM_MAX_TEXTURE_UNITS * 2> render_target_textures{};
+    std::array<uint64_t, SCE_GXM_MAX_TEXTURE_UNITS * 2> render_target_texture_copy_timestamp{};
+    std::bitset<SCE_GXM_MAX_TEXTURE_UNITS * 2> render_target_texture_mask;
 
     // used if necessary to restart easily the render pass
     vk::RenderPassBeginInfo curr_renderpass_info;

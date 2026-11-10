@@ -469,6 +469,7 @@ SurfaceRetrieveResult VKSurfaceCache::retrieve_color_surface_for_framebuffer(Mem
 }
 
 std::optional<TextureLookupResult> VKSurfaceCache::retrieve_color_surface_as_texture(const SceGxmTexture &texture, const SceGxmColorBaseFormat base_format, TextureViewport *texture_viewport) {
+    last_lookup_copied_render_target = false;
     // Create the key to access the cache struct
     const uint32_t address = (texture.data_addr << 2);
 
@@ -628,6 +629,7 @@ std::optional<TextureLookupResult> VKSurfaceCache::retrieve_color_surface_as_tex
 
     if (is_same_image || (start_sourced_line != 0) || (start_x != 0) || (info.width != width) || (info.height != height) || (info.format != base_format)) {
         const uint64_t scene_timestamp = reinterpret_cast<VKContext *>(state.context)->scene_timestamp;
+        last_lookup_copied_render_target = is_same_image;
 
         std::vector<CastedTexture> &casted_vec = info.casted_textures;
 

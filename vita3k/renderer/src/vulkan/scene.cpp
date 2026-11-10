@@ -411,6 +411,15 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
 
     context.check_for_macroblock_change(true);
 
+    // Vita3K-BG: the scene was split since these render target textures were copied, so copy them again
+    // (the game doesn't set them again, but expects to see what the previous draws rendered).
+    if (context.render_target_texture_mask.any()) {
+        for (size_t i = 0; i < context.render_target_textures.size(); i++) {
+            if (context.render_target_texture_mask[i] && context.render_target_texture_copy_timestamp[i] != context.scene_timestamp)
+                sync_texture(context, mem, i, context.render_target_textures[i], config);
+        }
+    }
+
     const bool maskupdate = gxm_fragment_program.is_maskupdate;
     const SceGxmProgram &fragment_program_gxp = *gxm_fragment_program.program.get(mem);
     const bool uses_framebuffer_fetch = !maskupdate && fragment_program_gxp.is_frag_color_used()
@@ -605,6 +614,8 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
 
     context.vertex_uniform_storage_allocated = false;
     context.fragment_uniform_storage_allocated = false;
+
+    context.drawn_in_recording = true;
 }
 
 } // namespace renderer::vulkan

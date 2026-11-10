@@ -130,6 +130,8 @@ void set_context(VKContext &context, MemState &mem, VKRenderTarget *rt, const Fe
     context.scene_timestamp++;
     context.gxm_scene_id++;
     context.state.texture_cache.current_scene_timestamp = context.scene_timestamp;
+    // textures are all synced again at the start of a scene
+    context.render_target_texture_mask.reset();
 
     SceGxmColorSurface *color_surface_fin = &context.record.color_surface;
     // set these values for the pipeline cache
@@ -296,6 +298,7 @@ void VKContext::start_recording(bool first_in_scene) {
     prerender_cmd.begin(begin_info);
 
     is_recording = true;
+    drawn_in_recording = false;
 
     // set all the dynamic state here
     render_cmd.setViewport(0, viewport);
@@ -705,7 +708,10 @@ void VKContext::check_for_macroblock_change(bool is_draw) {
     uint16_t curr_macroblock_x = scissor.offset.x / render_target->macroblock_width;
     uint16_t curr_macroblock_y = scissor.offset.y / render_target->macroblock_height;
 
-    if ((ignore_macroblock && is_draw) || curr_macroblock_x != last_macroblock_x || curr_macroblock_y != last_macroblock_y) {
+    // Vita3K-BG: in the slow path, split as soon as the next draw starts syncing its state (its textures are
+    // synced before the draw itself), so that render target copies made for it land in its own recording
+    // and see the previous draw's output, instead of in the previous recording, where they run first.
+    if ((ignore_macroblock && drawn_in_recording) || curr_macroblock_x != last_macroblock_x || curr_macroblock_y != last_macroblock_y) {
         // we changed the current macroblock, restart the renderpass
         last_macroblock_x = curr_macroblock_x;
         last_macroblock_y = curr_macroblock_y;
