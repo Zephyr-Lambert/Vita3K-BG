@@ -17,6 +17,35 @@ stopped, and the game hung when it later waited on that thread.
 
 Confirmed fixed on three stages, including letting the timer run out.
 
+## Fixed: triangular cuts in walls/floors at certain camera distances (both renderers)
+
+Symptom: a triangle-shaped section of a wall (stage 3) or ground (stage 4)
+showed a different, plain surface at some camera distances and angles, while
+the transparent dust/flower overlay on top stayed visible. Getting closer made
+it go away.
+
+Found with a RenderDoc capture (OpenGL). Pixel history at the cut: the brick
+wall draw failed the depth test (its depth 0.972) against a gray slab drawn
+earlier behind it (0.922); the overlay is drawn with depth writes off, so it
+still showed. The failing brick triangle had one vertex just in front of the
+camera (w ≈ 0.01) but outside the near plane.
+
+Cause: the vertex shader finalize in `spirv_recompiler.cpp` computed
+`max(z/w * z_scale + z_offset, 0) * w`. That per-vertex clamp moves the depth
+of any vertex past the near plane, and because depth is interpolated across
+the triangle, every pixel of the triangle got a too-far depth. Once the
+vertex went behind the camera (w < 0) the triangle was clipped normally,
+hence the cut disappearing up close.
+
+Fix: keep depth linear in clip space (`z * z_scale + z_offset * w`, remapped
+to −w..w for OpenGL) and clamp per pixel instead (`GL_DEPTH_CLAMP`; Vulkan
+`depthClampEnable` when the device supports it). Verified by shader
+replacement in the captured frame, then in game on stages 3 and 4. The shader
+cache version was bumped to 19 so old cached shaders are rebuilt.
+
+Ruled out along the way: z-fighting/invariance, mipmaps/LOD bias, resolution
+scale, anisotropic filtering, depth bias.
+
 ## Open: stage textures misaligned on Vulkan (NVIDIA RTX 2060, Linux)
 
 ### Symptom

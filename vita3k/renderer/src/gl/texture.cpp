@@ -22,11 +22,6 @@
 #include <renderer/gl/types.h>
 
 #include <gxm/functions.h>
-#include <util/log.h>
-
-#include <cstdlib>
-#include <set>
-#include <tuple>
 
 namespace renderer::gl {
 
@@ -46,34 +41,6 @@ static void apply_sampler_state(const SceGxmTexture &gxm_texture, const GLenum t
 #endif
     glTexParameteri(texture_bind_type, GL_TEXTURE_MIN_LOD, gxm_texture.true_lod_min());
     glTexParameteri(texture_bind_type, GL_TEXTURE_MIN_FILTER, min_filter);
-
-    // Vita3K-BG test switch and diagnostics for mipmap selection:
-    //   VITA3K_BG_MIPTEST=1  only ever sample the full-size texture (no smaller mip levels)
-    //   VITA3K_BG_MIPTEST=2  ignore the game's LOD bias and minimum LOD
-    {
-        static const int bg_miptest = [] {
-            const char *v = std::getenv("VITA3K_BG_MIPTEST");
-            const int m = v ? std::atoi(v) : 0;
-            if (m)
-                LOG_WARN("[Vita3K-BG] mipmap test mode {} (VITA3K_BG_MIPTEST)", m);
-            return m;
-        }();
-        static std::set<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>> bg_seen;
-        const auto key = std::make_tuple(static_cast<uint32_t>(gxm::get_format(gxm_texture)), gxm_texture.true_mip_count(),
-            static_cast<uint32_t>(gxm_texture.lod_bias), gxm_texture.true_lod_min(), static_cast<uint32_t>(gxm_texture.min_filter));
-        if (bg_seen.size() < 64 && bg_seen.insert(key).second)
-            LOG_WARN("[Vita3K-BG] texture {}x{} format 0x{:X} mips {} lod_bias {} ({:.3f}) lod_min {} min_filter {} mip_filter {}",
-                gxm::get_width(gxm_texture), gxm::get_height(gxm_texture), std::get<0>(key), std::get<1>(key), std::get<2>(key),
-                (static_cast<float>(gxm_texture.lod_bias) - 31.f) / 8.f, std::get<3>(key), std::get<4>(key), static_cast<uint32_t>(gxm_texture.mip_filter));
-        if (bg_miptest == 1) {
-            glTexParameterf(texture_bind_type, GL_TEXTURE_MAX_LOD, 0.0f);
-        } else if (bg_miptest == 2) {
-#ifndef __ANDROID__
-            glTexParameterf(texture_bind_type, GL_TEXTURE_LOD_BIAS, 0.0f);
-#endif
-            glTexParameteri(texture_bind_type, GL_TEXTURE_MIN_LOD, 0);
-        }
-    }
     glTexParameteri(texture_bind_type, GL_TEXTURE_MAG_FILTER, mag_filter);
 
     // anisotropic filtering

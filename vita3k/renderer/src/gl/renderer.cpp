@@ -398,14 +398,6 @@ void set_context(GLState &state, GLContext &context, const MemState &mem, const 
 
     // TODO: Take request to force load from given memory
     // Sync depth/stencil based on depth stencil surface.
-    // Vita3K-BG wireframe view: nothing fills the screen any more, so clear the colour buffer at the
-    // start of every scene that also starts with a fresh depth buffer (the 3D scenes).
-    if (bg_wireframe_mode() && color_surface_fin && !context.record.depth_stencil_surface.force_load && context.record.depth_stencil_surface.depth_data) {
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    }
     // Vita3K-BG: depth below the near plane is clamped per pixel, not clipped (see the vertex shader finalize)
     glEnable(GL_DEPTH_CLAMP);
     sync_depth_data(context.record);
