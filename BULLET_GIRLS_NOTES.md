@@ -122,3 +122,26 @@ buffer 0); OpenGL looks correct with zeros, so the scale was left alone.
   the guest memory at the address real hardware would use.
 - Compare the SPIR-V generated for one stage shader under the Vulkan target
   with the SPIR-V/GLSL generated for the OpenGL target.
+
+## Fixed: bloom trail on Vulkan with High Accuracy (rare)
+
+Only with Renderer Accuracy = High; Standard uses texture viewports and
+samples the render target directly, so it never showed the trail.
+
+The game builds bloom in one scene on a 1024x512 render target with
+macroblock sync and a full-size scissor, so Vita3K takes the slow path
+(`ignore_macroblock`: one recording per draw). Each blur draw samples the
+render target itself. With High Accuracy that sample is served from a copy
+recorded in the prerender command. Two problems:
+
+- The split happened at the draw, after the texture had been synced, so the
+  copy for draw N went into draw N-1's prerender command and ran before
+  draw N-1: it held last frame's result.
+- Textures are only re-synced when GXM marks them dirty (scene start, program
+  change), so later draws in the same scene never copied again.
+
+Fix: in the slow path, split as soon as the next draw starts syncing state
+(`drawn_in_recording`), and at each draw re-sync any texture that was served
+as a copy of the current render target if the recording changed since
+(`render_target_texture_mask`). Confirmed in game; Standard and High now look
+the same.

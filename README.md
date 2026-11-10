@@ -19,6 +19,12 @@
 >   NVIDIA RTX 2060 on Linux; other users' Vulkan setups were not affected. The stage shaders read
 >   registers that are never loaded; most drivers return 0 there, this one returned leftover data.
 >   Registers now start at 0 and out-of-range reads return 0. See [BULLET_GIRLS_NOTES.md](BULLET_GIRLS_NOTES.md).
+> - Vulkan with Renderer Accuracy set to High (rare; the default is Standard): bloom lagged behind the scene,
+>   leaving a glowing trail when turning. The blur passes read a copy of the bloom image taken before
+>   the previous pass had drawn. The copy is now taken after each pass.
+>
+> Recommended: Renderer Accuracy on Standard (the default). Both settings now look the same in this game,
+> and Standard is faster.
 >
 > **Known issues**
 > - The first mission load after updating the build can sit on a black screen for a while
