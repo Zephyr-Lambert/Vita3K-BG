@@ -145,3 +145,19 @@ Fix: in the slow path, split as soon as the next draw starts syncing state
 as a copy of the current render target if the recording changed since
 (`render_target_texture_mask`). Confirmed in game; Standard and High now look
 the same.
+
+## Not an emulator bug: tree sorting on stage 1
+
+Facing the end of stage 1, the left trees' foliage draws over the tree in
+front of it. Confirmed the same on real hardware (video capture). All the
+foliage on that row is one blended draw with depth writes off, and its
+triangles are ordered for looking the other way down the street.
+
+Planned for the translation patch rather than the emulator: reorder that
+mesh's triangles (or split it per tree) in the stage model data, once the
+model format is understood.
+
+## Planned for the translation patch: Western button layout (optional)
+
+Swap confirm/back (Circle/Cross) inside the game, together with the button
+prompt graphics, as an optional part of the patch.
