@@ -1092,7 +1092,9 @@ spv::Id load(spv::Builder &b, const SpirvShaderParameters &params, SpirvUtilFunc
     spv::Id idx_in_arr_2 = spv::NoResult;
 
     spv::Id finalize_offset = b.makeIntConstant(op.num + shift_offset);
+    bool is_indexed_read = false;
     if (op.bank == RegisterBank::INDEXED1 || op.bank == RegisterBank::INDEXED2) {
+        is_indexed_read = true;
         // Decode the info. Usually the number of bits in a INDEXED number is 7.
         // TODO: Fix the assumption
         const Imm2 bank_enc = (op.num >> 5) & 0b11;
@@ -1220,12 +1222,45 @@ spv::Id load(spv::Builder &b, const SpirvShaderParameters &params, SpirvUtilFunc
     first_pass_operands.push_back(idx_in_arr_1);
     second_pass_operands.push_back(idx_in_arr_2);
 
+    // Vita3K-BG: an indexed register read (e.g. sa[idx * 2 + n]) can point past the end of the
+    // register bank. Reading outside a private array is undefined; the OpenGL drivers tested return 0
+    // there while NVIDIA Vulkan returns leftover data, which scrambled stage texture coordinates in
+    // Bullet Girls. Clamp the index into range and return 0 when it was out of range, matching OpenGL.
+    spv::Id in_range_1 = spv::NoResult;
+    spv::Id in_range_2 = spv::NoResult;
+    if (is_indexed_read) {
+        const spv::Id type_i32 = b.makeIntType(32);
+        const spv::Id type_bool = b.makeBoolType();
+        const spv::Id bank_arr_type = b.getContainedTypeId(b.getTypeId(bank_base));
+        const spv::Id bank_len = b.makeIntConstant(b.getNumTypeConstituents(bank_arr_type));
+        // Unsigned compare also rejects negative indices.
+        in_range_1 = b.createBinOp(spv::OpULessThan, type_bool, idx_in_arr_1, bank_len);
+        in_range_2 = b.createBinOp(spv::OpULessThan, type_bool, idx_in_arr_2, bank_len);
+        first_pass_operands[1] = b.createTriOp(spv::OpSelect, type_i32, in_range_1, idx_in_arr_1, b.makeIntConstant(0));
+        second_pass_operands[1] = b.createTriOp(spv::OpSelect, type_i32, in_range_2, idx_in_arr_2, b.makeIntConstant(0));
+    }
+
     // Do an access chain
     first_pass = b.createOp(spv::OpAccessChain, comp_type, first_pass_operands);
     connected_friend = b.createOp(spv::OpAccessChain, comp_type, second_pass_operands);
 
-    first_pass = finalize(b, b.createLoad(first_pass, spv::NoPrecision), b.createLoad(connected_friend, spv::NoPrecision), extract_swizz,
-        finalize_offset, extract_mask);
+    spv::Id first_load = b.createLoad(first_pass, spv::NoPrecision);
+    spv::Id friend_load = b.createLoad(connected_friend, spv::NoPrecision);
+    if (in_range_1 != spv::NoResult) {
+        const spv::Id elem_type = b.getTypeId(first_load);
+        const spv::Id zero = b.makeNullConstant(elem_type);
+        spv::Id cond_1 = in_range_1;
+        spv::Id cond_2 = in_range_2;
+        if (b.isVectorType(elem_type)) {
+            const spv::Id bvec_type = b.makeVectorType(b.makeBoolType(), b.getNumTypeComponents(elem_type));
+            cond_1 = b.smearScalar(spv::NoPrecision, in_range_1, bvec_type);
+            cond_2 = b.smearScalar(spv::NoPrecision, in_range_2, bvec_type);
+        }
+        first_load = b.createTriOp(spv::OpSelect, elem_type, cond_1, first_load, zero);
+        friend_load = b.createTriOp(spv::OpSelect, elem_type, cond_2, friend_load, zero);
+    }
+
+    first_pass = finalize(b, first_load, friend_load, extract_swizz, finalize_offset, extract_mask);
 
     if (first_pass == spv::NoResult) {
         return first_pass;

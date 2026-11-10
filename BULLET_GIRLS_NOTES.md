@@ -91,6 +91,27 @@ The bad values almost certainly come from that per-vertex UV-offset lookup.
 - Memory mapping mode (all modes, including Disabled)
 - Stale GPU copy past the declared 160 bytes of buffer 3 (synced 8 KiB)
 
+### Finding from RenderDoc captures (Vulkan + OpenGL, stage 3)
+The stage shaders seen in these captures (inputs `aXYZ aCOL aUV aTanm`) don't
+use the `LDR` path above; they read the UV offset with an indexed
+secondary-attribute read:
+
+- `idx = (aTanm.x << 1) + 42`, then two reads of `sa[idx * 2 + 14]` and
+  `sa[idx * 2 + 15]` (word offsets), added to `aUV` for the texcoord output.
+- `aTanm.x` ranges 0–31 on stage 3, so the word offset is 98–223, while Vita3K
+  only loads 22 vec4 (88 words) into `sa` and the array holds 32 vec4
+  (128 words). Every one of these reads hits unloaded registers, and many go
+  past the end of the array.
+- On OpenGL (replayed) every output UV equals `aUV` exactly, i.e. those reads
+  return 0. On NVIDIA Vulkan, private arrays aren't zeroed and out-of-range
+  reads return whatever is there, hence offsets that change per frame.
+
+Fix (testing): register banks are zero-initialised, and indexed reads clamp
+the index into range and return 0 when it was out of range. Shader cache
+version bumped to 20. Open question: whether `idx * 2` is the right scale for
+indexed SA access (with `idx + 14` the reads would land exactly on uniform
+buffer 0); OpenGL looks correct with zeros, so the scale was left alone.
+
 ### Ideas not yet tried
 - Instrument the translated vertex shader to write the computed `LDR`
   address and loaded value to a debug buffer, read it back, and compare with
