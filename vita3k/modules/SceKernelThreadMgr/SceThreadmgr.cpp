@@ -22,9 +22,11 @@
 #include <kernel/state.h>
 #include <kernel/sync_primitives.h>
 #include <kernel/types.h>
+#include <modules/sysmem_state.h>
 #include <packages/functions.h>
 
 #include <chrono>
+#include <span>
 #include <thread>
 #include <utility>
 
@@ -109,11 +111,14 @@ EXPORT(int, __sceKernelCreateLwMutex, Ptr<SceKernelLwMutexWork> workarea, const 
     TRACY_FUNC(__sceKernelCreateLwMutex, workarea, name, attr, opt);
     if (!workarea)
         return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_ADDR);
+    const Ptr<SceKernelLwMutexOptParam> opt_param = opt.get(emuenv.mem)->opt_param;
+    if (opt_param && !is_valid_addr(emuenv.mem, opt_param.address()))
+        return RET_ERROR(SCE_KERNEL_ERROR_INVALID_MEMORY_ACCESS);
     const int init_count = opt.get(emuenv.mem)->init_count;
-    if (const SceInt32 error = Mutex::check_create(name, attr, init_count, false))
+    if (const SceInt32 error = Mutex::check_create(name, attr, init_count, nullptr, false))
         return RET_ERROR(error);
 
-    const auto mutex = std::make_shared<LwMutex>(attr, name, init_count, emuenv.kernel.get_thread(thread_id), workarea);
+    const auto mutex = std::make_shared<LwMutex>(attr, name, init_count, emuenv.kernel.get_thread(thread_id), SCE_KERNEL_LOWEST_PRIORITY_KERNEL, workarea);
     const SceUID uid = emuenv.kernel.objects.add(mutex, emuenv.kernel.get_next_uid());
     SceKernelLwMutexWork *workarea_mem = workarea.get(emuenv.mem);
     *workarea_mem = {};
@@ -259,12 +264,34 @@ EXPORT(int, _sceKernelCreateMsgPipeWithLR) {
     return UNIMPLEMENTED();
 }
 
-EXPORT(int, _sceKernelCreateMutex, const char *name, SceUInt attr, int init_count, SceKernelMutexOptParam *opt_param) {
-    TRACY_FUNC(_sceKernelCreateMutex, name, attr, init_count, opt_param);
-    if (const SceInt32 error = Mutex::check_create(name, attr, init_count, false))
-        return RET_ERROR(error);
+// The priority a thread priority argument stands for, the caller's for 0, or ILLEGAL_PRIORITY
+static int resolve_priority(int priority, const ThreadState &caller) {
+    if (priority == SCE_KERNEL_CURRENT_THREAD_PRIORITY)
+        priority = caller.get_priority();
+    if (priority >= SCE_KERNEL_HIGHEST_DEFAULT_PRIORITY && priority <= SCE_KERNEL_LOWEST_DEFAULT_PRIORITY)
+        priority = SCE_KERNEL_GAME_DEFAULT_PRIORITY_ACTUAL + (priority - SCE_KERNEL_DEFAULT_PRIORITY);
+    if (priority < SCE_KERNEL_HIGHEST_PRIORITY_USER || priority > SCE_KERNEL_LOWEST_PRIORITY_USER)
+        return SCE_KERNEL_ERROR_ILLEGAL_PRIORITY;
+    return priority;
+}
 
-    const auto mutex = std::make_shared<HeavyMutex>(attr, name, init_count, emuenv.kernel.get_thread(thread_id));
+EXPORT(int, _sceKernelCreateMutex, const char *name, SceUInt attr, int init_count, Ptr<SceKernelMutexOptParam> opt_param) {
+    TRACY_FUNC(_sceKernelCreateMutex, name, attr, init_count, opt_param);
+    if (opt_param && !is_valid_addr_len(emuenv.mem, opt_param.address(), sizeof(SceKernelMutexOptParam)))
+        return RET_ERROR(SCE_KERNEL_ERROR_INVALID_MEMORY_ACCESS);
+    const SceKernelMutexOptParam *opt = opt_param.get(emuenv.mem);
+    if (const SceInt32 error = Mutex::check_create(name, attr, init_count, opt, false))
+        return RET_ERROR(error);
+    const ThreadStatePtr thread = emuenv.kernel.get_thread(thread_id);
+    int ceiling = SCE_KERNEL_LOWEST_PRIORITY_KERNEL;
+    if (attr & SCE_KERNEL_MUTEX_ATTR_CEILING) {
+        ceiling = resolve_priority(opt->ceilingPriority, *thread);
+        // A creator that takes the mutex at once can't have a priority below its ceiling
+        if (ceiling < 0 || (init_count > 0 && ceiling > thread->get_priority()))
+            return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_PRIORITY);
+    }
+
+    const auto mutex = std::make_shared<HeavyMutex>(attr, name, init_count, thread, ceiling);
     return emuenv.kernel.objects.add(mutex, emuenv.kernel.get_next_uid());
 }
 
@@ -1218,20 +1245,10 @@ EXPORT(SceInt32, sceKernelChangeThreadPriority2, SceUID thid, SceInt32 priority)
     const ThreadStatePtr thread = emuenv.kernel.get_thread(thid ? thid : thread_id);
     if (!thread)
         return RET_ERROR(SCE_KERNEL_ERROR_UNKNOWN_THREAD_ID);
-
-    if (priority == SCE_KERNEL_CURRENT_THREAD_PRIORITY) {
-        priority = emuenv.kernel.get_thread(thread_id)->get_priority();
-    }
-
-    if (priority >= SCE_KERNEL_HIGHEST_DEFAULT_PRIORITY
-        && priority <= SCE_KERNEL_LOWEST_DEFAULT_PRIORITY) {
-        priority = SCE_KERNEL_GAME_DEFAULT_PRIORITY_ACTUAL + (priority - SCE_KERNEL_DEFAULT_PRIORITY);
-    }
-
-    if (priority < SCE_KERNEL_HIGHEST_PRIORITY_USER || priority > SCE_KERNEL_LOWEST_PRIORITY_USER)
+    const int resolved = resolve_priority(priority, *emuenv.kernel.get_thread(thread_id));
+    if (resolved < 0)
         return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_PRIORITY);
-
-    return thread->change_priority(priority);
+    return thread->change_priority(resolved);
 }
 
 EXPORT(SceInt32, sceKernelChangeThreadPriority, SceUID thid, SceInt32 priority) {
@@ -1283,9 +1300,12 @@ EXPORT(SceInt32, sceKernelClearEventFlag, SceUID evfId, SceUInt32 bitPattern) {
     return event->clear(bitPattern);
 }
 
-EXPORT(int, sceKernelCloseCond) {
-    TRACY_FUNC(sceKernelCloseCond);
-    return UNIMPLEMENTED();
+EXPORT(int, sceKernelCloseCond, SceUID condition_variable_id) {
+    TRACY_FUNC(sceKernelCloseCond, condition_variable_id);
+    // A close of a condition variable is its delete
+    if (!emuenv.kernel.objects.remove<HeavyCond>(condition_variable_id, thread_id))
+        return RET_ERROR(SCE_KERNEL_ERROR_UNKNOWN_COND_ID);
+    return SCE_KERNEL_OK;
 }
 
 EXPORT(int, sceKernelCloseEventFlag, SceUID evfId) {
@@ -1334,16 +1354,22 @@ EXPORT(int, sceKernelCloseTimer) {
     return STUBBED("References not implemented.");
 }
 
-// The length of the guest string at str, at most max, or -1 if it reaches unmapped memory first
-static int guest_strnlen(const MemState &mem, Ptr<const char> str, int max) {
-    for (int length = 0; length < max; length++) {
+// Copies a guest string of at most out.size() - 1 characters to out. Returns its length, out.size() if it is longer, or -1 if a byte isn't mapped.
+static int copy_guest_string(const MemState &mem, Ptr<const char> str, std::span<char> out) {
+    const int size = static_cast<int>(out.size());
+    for (int length = 0; length < size; length++) {
         const Address addr = str.address() + length;
-        if (!is_valid_addr(mem, addr))
+        if (!is_valid_addr(mem, addr)) {
+            out[0] = '\0';
             return -1;
-        if (*Ptr<const char>(addr).get(mem) == '\0')
+        }
+        const char c = *Ptr<const char>(addr).get(mem);
+        out[length] = c;
+        if (c == '\0')
             return length;
     }
-    return max;
+    out[size - 1] = '\0';
+    return size;
 }
 
 EXPORT(SceUID, sceKernelCreateCallback, Ptr<const char> name, SceUInt32 attr, Ptr<SceKernelCallbackFunction> callbackFunc, Ptr<void> pCommon) {
@@ -1351,7 +1377,8 @@ EXPORT(SceUID, sceKernelCreateCallback, Ptr<const char> name, SceUInt32 attr, Pt
     if (!name)
         return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_ADDR);
     // The name is read up to one byte past the kept length
-    const int name_length = guest_strnlen(emuenv.mem, name, SCE_UID_NAMELEN + 1);
+    char name_copy[SCE_UID_NAMELEN + 1];
+    const int name_length = copy_guest_string(emuenv.mem, name, name_copy);
     if (name_length < 0)
         return RET_ERROR(SCE_KERNEL_ERROR_INVALID_MEMORY_ACCESS);
     // With the openable attribute, a name past the kept length is refused before the attribute
@@ -1362,7 +1389,7 @@ EXPORT(SceUID, sceKernelCreateCallback, Ptr<const char> name, SceUInt32 attr, Pt
     if (!is_valid_addr(emuenv.mem, callbackFunc.address() & ~1))
         return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_ADDR);
 
-    return emuenv.kernel.objects.add(std::make_shared<Callback>(thread_id, name.get(emuenv.mem), callbackFunc, pCommon), emuenv.kernel.get_next_uid());
+    return emuenv.kernel.objects.add(std::make_shared<Callback>(thread_id, name_copy, callbackFunc, pCommon), emuenv.kernel.get_next_uid());
 }
 
 // Whether a game may create a thread with this priority, absolute or relative to the default one
@@ -1402,6 +1429,8 @@ static int delay_thread(KernelState &kernel, SceUID thread_id, SceUInt delay_us)
     if (delay_us == 0)
         return SCE_KERNEL_ERROR_INVALID_ARGUMENT;
 
+    // Shorter delays last 200 microseconds
+    delay_us = std::max(delay_us, 200u);
     const ThreadStatePtr thread = kernel.get_thread(thread_id);
     const Deadline deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(delay_us);
     return thread->delay_until(deadline, false);
@@ -1412,6 +1441,7 @@ static int delay_thread_cb(KernelState &kernel, SceUID thread_id, SceUInt delay_
     if (delay_us == 0)
         return SCE_KERNEL_ERROR_INVALID_ARGUMENT;
 
+    delay_us = std::max(delay_us, 200u);
     // Time spent in callbacks counts toward the delay
     const Deadline deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(delay_us);
     const ThreadStatePtr thread = kernel.get_thread(thread_id);
@@ -1593,6 +1623,11 @@ EXPORT(SceInt32, sceKernelGetThreadmgrUIDClass, SceUID uid) {
         return std::to_underlying(UidClass::thread);
     if (const std::shared_ptr<KernelObject> obj = emuenv.kernel.objects.find(uid))
         return std::to_underlying(obj->get_uid_class());
+    const auto state = emuenv.kernel.obj_store.get<SysmemState>();
+    const std::lock_guard<std::mutex> lock(state->mutex);
+    // A memory block has no thread manager class
+    if (state->blocks.contains(uid))
+        return RET_ERROR(SCE_KERNEL_ERROR_INVALID_ARGUMENT);
     return RET_ERROR(SCE_KERNEL_ERROR_INVALID_UID);
 }
 
@@ -1636,45 +1671,43 @@ EXPORT(SceInt32, sceKernelNotifyCallback, SceUID callbackId, SceInt32 notifyArg)
     return SCE_KERNEL_OK;
 }
 
-EXPORT(int, sceKernelOpenCond) {
-    TRACY_FUNC(sceKernelOpenCond);
-    return UNIMPLEMENTED();
+// Finds the openable object of type T with this name and returns its UID
+template <KernelObjectClass T>
+static SceUID open_by_name(EmuEnvState &emuenv, const char *export_name, Ptr<const char> name) {
+    if (!name)
+        return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_ADDR);
+    char name_copy[SCE_UID_NAMELEN + 1];
+    const int name_length = copy_guest_string(emuenv.mem, name, name_copy);
+    if (name_length < 0)
+        return RET_ERROR(SCE_KERNEL_ERROR_INVALID_MEMORY_ACCESS);
+    if (name_length > SCE_UID_NAMELEN)
+        return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
+    const auto found = emuenv.kernel.objects.find_if<T>([&](const T &object) {
+        return (object.attr & SCE_KERNEL_ATTR_OPENABLE) && strncmp(object.name, name_copy, sizeof(object.name)) == 0;
+    });
+    if (!found)
+        return RET_ERROR(SCE_KERNEL_ERROR_UID_CANNOT_FIND_BY_NAME);
+    return found->uid;
 }
 
-EXPORT(SceUID, sceKernelOpenEventFlag, const char *pName) {
+EXPORT(SceUID, sceKernelOpenCond, Ptr<const char> pName) {
+    TRACY_FUNC(sceKernelOpenCond, pName);
+    return open_by_name<HeavyCond>(emuenv, export_name, pName);
+}
+
+EXPORT(SceUID, sceKernelOpenEventFlag, Ptr<const char> pName) {
     TRACY_FUNC(sceKernelOpenEventFlag, pName);
-    if (strlen(pName) > SCE_UID_NAMELEN)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
-
-    const auto found = emuenv.kernel.objects.find_by_name<EventFlag>(pName);
-    if (!found)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_CANNOT_FIND_BY_NAME);
-
-    return found->uid;
+    return open_by_name<EventFlag>(emuenv, export_name, pName);
 }
 
-EXPORT(SceUID, sceKernelOpenMsgPipe, const char *pName) {
+EXPORT(SceUID, sceKernelOpenMsgPipe, Ptr<const char> pName) {
     TRACY_FUNC(sceKernelOpenMsgPipe, pName);
-    if (strlen(pName) > SCE_UID_NAMELEN)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
-
-    const auto found = emuenv.kernel.objects.find_by_name<MsgPipe>(pName);
-    if (!found)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_CANNOT_FIND_BY_NAME);
-
-    return found->uid;
+    return open_by_name<MsgPipe>(emuenv, export_name, pName);
 }
 
-EXPORT(SceUID, sceKernelOpenMutex, const char *pName) {
+EXPORT(SceUID, sceKernelOpenMutex, Ptr<const char> pName) {
     TRACY_FUNC(sceKernelOpenMutex, pName);
-    if (strlen(pName) > SCE_UID_NAMELEN)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
-
-    const auto found = emuenv.kernel.objects.find_by_name<HeavyMutex>(pName);
-    if (!found)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_CANNOT_FIND_BY_NAME);
-
-    return found->uid;
+    return open_by_name<HeavyMutex>(emuenv, export_name, pName);
 }
 
 EXPORT(int, sceKernelOpenMutex_089) {
@@ -1682,53 +1715,31 @@ EXPORT(int, sceKernelOpenMutex_089) {
     return UNIMPLEMENTED();
 }
 
-EXPORT(int, sceKernelOpenRWLock) {
-    TRACY_FUNC(sceKernelOpenRWLock);
-    return UNIMPLEMENTED();
+EXPORT(SceUID, sceKernelOpenRWLock, Ptr<const char> pName) {
+    TRACY_FUNC(sceKernelOpenRWLock, pName);
+    return open_by_name<RWLock>(emuenv, export_name, pName);
 }
 
-EXPORT(SceUID, sceKernelOpenSema, const char *pName) {
+EXPORT(SceUID, sceKernelOpenSema, Ptr<const char> pName) {
     TRACY_FUNC(sceKernelOpenSema, pName);
-    if (strlen(pName) > SCE_UID_NAMELEN)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
-
-    const auto found = emuenv.kernel.objects.find_by_name<Semaphore>(pName);
-    if (!found)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_CANNOT_FIND_BY_NAME);
-
-    return found->uid;
+    return open_by_name<Semaphore>(emuenv, export_name, pName);
 }
 
-EXPORT(SceUID, sceKernelOpenSimpleEvent, const char *pName) {
+EXPORT(SceUID, sceKernelOpenSimpleEvent, Ptr<const char> pName) {
     TRACY_FUNC(sceKernelOpenSimpleEvent, pName);
-    if (!pName)
-        return RET_ERROR(SCE_KERNEL_ERROR_ILLEGAL_ADDR);
-
-    if (strlen(pName) > SCE_UID_NAMELEN)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
-
-    const auto found = emuenv.kernel.objects.find_if<SimpleEvent>([=](const SimpleEvent &event) {
-        return (event.attr & SCE_KERNEL_ATTR_OPENABLE) && strncmp(event.name, pName, sizeof(event.name)) == 0;
-    });
-    if (!found)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_CANNOT_FIND_BY_NAME);
-
+    const SceUID uid = open_by_name<SimpleEvent>(emuenv, export_name, pName);
+    if (uid < 0)
+        return uid;
     // A delete that came first wins, as if the name wasn't found
-    if (found->set_system_event(SCE_KERNEL_EVENT_OPEN, system_event_user_data(thread_id)) != SCE_KERNEL_OK)
+    const SimpleEventPtr event = emuenv.kernel.objects.find<SimpleEvent>(uid);
+    if (!event || event->set_system_event(SCE_KERNEL_EVENT_OPEN, system_event_user_data(thread_id)) != SCE_KERNEL_OK)
         return RET_ERROR(SCE_KERNEL_ERROR_UID_CANNOT_FIND_BY_NAME);
-    return found->uid;
+    return uid;
 }
 
-EXPORT(SceUID, sceKernelOpenTimer, const char *pName) {
+EXPORT(SceUID, sceKernelOpenTimer, Ptr<const char> pName) {
     TRACY_FUNC(sceKernelOpenTimer, pName);
-    if (strlen(pName) > SCE_UID_NAMELEN)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_NAME_TOO_LONG);
-
-    const auto found = emuenv.kernel.objects.find_by_name<Timer>(pName);
-    if (!found)
-        return RET_ERROR(SCE_KERNEL_ERROR_UID_CANNOT_FIND_BY_NAME);
-
-    return found->uid;
+    return open_by_name<Timer>(emuenv, export_name, pName);
 }
 
 EXPORT(int, sceKernelPollSema, SceUID semaid, int32_t needCount) {
