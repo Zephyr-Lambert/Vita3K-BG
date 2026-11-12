@@ -598,6 +598,7 @@ void apply_renderer_config(EmuEnvState &emuenv) {
     r.res_multiplier = cc.resolution_multiplier;
     r.set_vsync_state(cc.v_sync);
     r.set_surface_sync_state(cc.disable_surface_sync);
+    r.smooth_upscaled_effects = cc.smooth_upscaled_effects;
     r.set_screen_filter(cc.screen_filter);
     r.set_anisotropic_filtering(cc.anisotropic_filtering);
     r.set_stretch_display(cc.stretch_the_display_area);
@@ -691,6 +692,7 @@ void apply_runtime_settings(EmuEnvState &emuenv) {
     auto &r = *emuenv.renderer;
     r.set_vsync_state(cc.v_sync);
     r.set_surface_sync_state(cc.disable_surface_sync);
+    r.smooth_upscaled_effects = cc.smooth_upscaled_effects;
     r.set_screen_filter(cc.screen_filter);
     r.set_anisotropic_filtering(cc.anisotropic_filtering);
     r.set_stretch_display(cc.stretch_the_display_area);

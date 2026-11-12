@@ -544,6 +544,7 @@ void draw(VKContext &context, SceGxmPrimitiveType type, SceGxmIndexFormat format
     auto &frag_ublock = context.curr_frag_ublock.base_block;
     frag_ublock.writing_mask = context.record.writing_mask;
     frag_ublock.res_multiplier = context.state.res_multiplier;
+    frag_ublock.smooth_upscaled_effects = context.state.smooth_upscaled_effects ? 1.0f : 0.0f;
     const bool has_msaa = context.render_target->multisample_mode;
     const bool has_downscale = context.record.color_surface.downscale;
     if (has_msaa && !has_downscale)

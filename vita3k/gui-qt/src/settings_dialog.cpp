@@ -322,6 +322,7 @@ void SettingsDialog::load_config() {
 
     m_ui->vsync->setChecked(m_config.v_sync);
     m_ui->disable_surface_sync->setChecked(m_config.disable_surface_sync);
+    m_ui->smooth_upscaled_effects->setChecked(m_config.smooth_upscaled_effects);
     m_ui->async_pipeline_compilation->setChecked(m_config.async_pipeline_compilation);
 
     {
@@ -616,6 +617,7 @@ void SettingsDialog::build_desired_config(Config &desired) const {
     current.high_accuracy = m_ui->renderer_accuracy_box->currentIndex() == 1;
     current.v_sync = m_ui->vsync->isChecked();
     current.disable_surface_sync = m_ui->disable_surface_sync->isChecked();
+    current.smooth_upscaled_effects = m_ui->smooth_upscaled_effects->isChecked();
     current.async_pipeline_compilation = m_ui->async_pipeline_compilation->isChecked();
     current.memory_mapping = m_ui->memory_mapping_box->currentData().toString().toStdString();
     current.screen_filter = m_ui->screen_filter_box->currentText().toStdString();
@@ -1208,6 +1210,7 @@ void SettingsDialog::setup_connections() {
         { m_ui->renderer_accuracy_box, tr("Rendering Accuracy"), m_tooltips->renderer_accuracy },
         { m_ui->vsync, tr("V-Sync"), m_tooltips->vsync },
         { m_ui->disable_surface_sync, tr("Disable Surface Sync"), m_tooltips->disable_surface_sync },
+        { m_ui->smooth_upscaled_effects, tr("Smooth Upscaled Effects"), m_tooltips->smooth_upscaled_effects },
         { m_ui->async_pipeline_compilation, tr("Asynchronous Pipeline Compilation"), m_tooltips->async_pipeline },
         { m_ui->memory_mapping_box, tr("Memory Mapping"), m_tooltips->memory_mapping },
         { m_ui->screen_filter_box, tr("Screen Filter"), m_tooltips->screen_filter },

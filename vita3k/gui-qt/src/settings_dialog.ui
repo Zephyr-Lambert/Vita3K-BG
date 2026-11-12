@@ -447,6 +447,13 @@ QGroupBox[flat=&quot;true&quot;]::title {
                      </property>
                     </widget>
                    </item>
+                   <item>
+                    <widget class="QCheckBox" name="smooth_upscaled_effects">
+                     <property name="text">
+                      <string>Smooth Upscaled Effects</string>
+                     </property>
+                    </widget>
+                   </item>
                   </layout>
                  </widget>
                 </item>

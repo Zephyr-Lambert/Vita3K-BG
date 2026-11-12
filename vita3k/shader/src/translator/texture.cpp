@@ -172,6 +172,10 @@ spv::Id shader::usse::USSETranslatorVisitor::do_fetch_texture(const spv::Id tex,
         spv::Id scale = utils::create_access_chain(m_b, spv::StorageClassUniform, m_spirv_params.render_info_id, { m_b.makeIntConstant(FRAG_UNIFORM_res_multiplier) });
         scale = m_b.createLoad(scale, spv::NoPrecision);
         scale = m_b.createBuiltinCall(type_f32, std_builtins, GLSLstd450FMax, { scale, m_b.makeFloatConstant(1.0f) });
+        // with the setting off, behave as at native resolution: a plain bilinear sample
+        spv::Id enabled = utils::create_access_chain(m_b, spv::StorageClassUniform, m_spirv_params.render_info_id, { m_b.makeIntConstant(FRAG_UNIFORM_smooth_upscaled_effects) });
+        enabled = m_b.createLoad(enabled, spv::NoPrecision);
+        scale = m_b.createBuiltinCall(type_f32, std_builtins, GLSLstd450FMix, { m_b.makeFloatConstant(1.0f), scale, enabled });
         const spv::Id upscaled = m_b.createBinOp(spv::OpFOrdGreaterThan, m_b.makeBoolType(), scale, m_b.makeFloatConstant(1.0f));
         const spv::Id spread = m_b.createTriOp(spv::OpSelect, type_f32, upscaled,
             m_b.createBinOp(spv::OpFMul, type_f32, scale, m_b.makeFloatConstant(0.25f)), m_b.makeFloatConstant(0.0f));

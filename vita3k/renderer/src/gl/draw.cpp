@@ -162,6 +162,7 @@ void draw(GLState &renderer, GLContext &context, const FeatureState &features, S
     frag_ublock.writing_mask = context.record.writing_mask;
     frag_ublock.use_raw_image = static_cast<float>(use_raw_image);
     frag_ublock.res_multiplier = renderer.res_multiplier;
+    frag_ublock.smooth_upscaled_effects = renderer.smooth_upscaled_effects ? 1.0f : 0.0f;
     const bool has_msaa = context.render_target->multisample_mode;
     const bool has_downscale = context.record.color_surface.downscale;
     if (has_msaa && !has_downscale)

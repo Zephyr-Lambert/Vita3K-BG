@@ -46,6 +46,7 @@ public:
     QString renderer_accuracy;
     QString vsync;
     QString disable_surface_sync;
+    QString smooth_upscaled_effects;
     QString async_pipeline;
     QString screen_filter;
     QString gpu_device;

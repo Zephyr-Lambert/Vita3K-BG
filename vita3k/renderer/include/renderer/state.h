@@ -101,6 +101,8 @@ struct State {
     FeatureState features;
     float res_multiplier;
     bool disable_surface_sync;
+    // Vita3K-BG: smooth the taps of known post-processing shaders when upscaling (see texture.cpp in shader)
+    bool smooth_upscaled_effects = true;
     bool stretch_the_display_area;
     bool fullscreen_hd_res_pixel_perfect;
     bool fullscreen = false;
